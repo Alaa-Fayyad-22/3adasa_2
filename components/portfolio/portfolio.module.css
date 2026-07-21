@@ -1,0 +1,1325 @@
+/* =========================================================================
+   Jad Daou — portfolio
+   One stylesheet for the whole page; the sections share too much type and
+   spacing vocabulary to be worth splitting apart.
+   ========================================================================= */
+
+.root {
+  position: relative;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.root[data-hide-cursor="true"],
+.root[data-hide-cursor="true"] * {
+  cursor: none;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- shared -- */
+
+.eyebrow {
+  margin: 0 0 18px;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.bodyCopy {
+  margin: 0 0 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--ink-75);
+}
+
+.bodyCopy:last-child {
+  margin-bottom: 0;
+}
+
+.mutedCopy {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ink-60);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: clamp(34px, 5vw, 64px);
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------ atmosphere -- */
+
+.loader {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.1s ease;
+}
+
+.loader[data-visible="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.loaderMark {
+  font-family: var(--font-display), serif;
+  font-size: clamp(22px, 3vw, 34px);
+  letter-spacing: 0.12em;
+  color: var(--ink);
+  opacity: 0;
+  transition: opacity 1.3s ease;
+}
+
+.loaderMark[data-in="true"] {
+  opacity: 1;
+}
+
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  animation: grainShift 1.4s steps(6) infinite;
+}
+
+.cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(244, 242, 238, 0.9);
+  border: none;
+  pointer-events: none;
+  transition:
+    width 0.28s var(--ease-out-expo),
+    height 0.28s var(--ease-out-expo),
+    background 0.2s ease;
+}
+
+.cursor[data-expanded="true"] {
+  width: 74px;
+  height: 74px;
+  background: transparent;
+  border: 1px solid var(--accent);
+}
+
+.cursorLabel {
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.cursor[data-expanded="true"] .cursorLabel {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------- header -- */
+
+.header {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26px var(--gutter);
+  /* Inverts against whatever scrolls beneath, so the mark stays legible. */
+  mix-blend-mode: difference;
+}
+
+.wordmark {
+  font-family: var(--font-display), serif;
+  font-size: 19px;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+}
+
+.wordmark:hover {
+  color: var(--ink);
+}
+
+.menuToggle {
+  padding: 8px;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.menu {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  background: var(--bg);
+}
+
+.menuItem {
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-family: var(--font-display), serif;
+  font-size: clamp(28px, 5vw, 46px);
+  cursor: pointer;
+  transition: color 0.25s ease;
+}
+
+.menuItem:hover {
+  color: var(--accent);
+}
+
+.menuClose {
+  margin-top: 20px;
+  padding: 12px 28px;
+  background: none;
+  border: 1px solid var(--ink-25);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.25s ease;
+}
+
+.menuClose:hover {
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------- category filter -- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+}
+
+.filter {
+  padding: 0 0 8px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: rgba(244, 242, 238, 0.55);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.filter:hover {
+  color: var(--ink);
+}
+
+.filter[data-active="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ------------------------------------------------------------ image slot -- */
+
+.slot {
+  position: relative;
+  overflow: hidden;
+  background: #131316;
+}
+
+/* Hatched stand-in shown until a photograph is supplied for the slot. */
+.slotPlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 26px,
+    rgba(244, 242, 238, 0.05) 26px 28px
+  );
+  color: var(--ink-35);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.slotImg,
+.slotImgContain {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.slotImg {
+  object-fit: cover;
+}
+
+.slotImgContain {
+  object-fit: contain;
+}
+
+.fill {
+  width: 100%;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------- 3D scene -- */
+
+.sceneCanvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Tall scroll runway; its progress drives the camera. */
+.sceneTrack {
+  position: relative;
+  height: 460vh;
+}
+
+.sceneStage {
+  position: sticky;
+  top: 0;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.heroOverlay {
+  position: absolute;
+  z-index: 3;
+  right: var(--gutter);
+  bottom: 14vh;
+  left: var(--gutter);
+  pointer-events: none;
+}
+
+.heroTitle {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: clamp(48px, 9vw, 132px);
+  line-height: 0.98;
+  color: var(--ink);
+}
+
+.heroTagline {
+  max-width: 560px;
+  margin: 22px 0 0;
+  font-family: var(--font-display), serif;
+  font-style: italic;
+  font-size: clamp(16px, 2vw, 24px);
+  color: var(--ink-85);
+}
+
+.scrollCue {
+  position: absolute;
+  z-index: 3;
+  bottom: 36px;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.scrollCueLine {
+  width: 1px;
+  height: 34px;
+  background: var(--ink-50);
+  animation: scrollCue 2.4s ease-in-out infinite;
+}
+
+.scrollCueLabel {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+
+.journeyPortfolio {
+  position: absolute;
+  z-index: 3;
+  top: 9vh;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 var(--gutter);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.journeyHeading {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: clamp(30px, 4.4vw, 56px);
+  color: var(--ink);
+}
+
+.journeyCaption {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: 9vh;
+  left: 0;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--ink-85);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.journeyAbout {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  right: var(--gutter);
+  max-width: min(520px, 42vw);
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.journeyAboutHeading {
+  margin: 0 0 24px;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: clamp(24px, 3.2vw, 40px);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------- flat showcase -- */
+
+.staticHero {
+  position: relative;
+  height: 100vh;
+  min-height: 560px;
+  overflow: hidden;
+}
+
+.staticHeroImage {
+  position: absolute;
+  inset: 0;
+  transform: scale(1.08);
+  will-change: transform;
+}
+
+.staticHeroScrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(10, 10, 10, 0.1),
+    rgba(10, 10, 10, 0.35) 55%,
+    rgba(10, 10, 10, 0.85)
+  );
+  pointer-events: none;
+}
+
+.staticHeroCopy {
+  position: absolute;
+  right: var(--gutter);
+  bottom: 14vh;
+  left: var(--gutter);
+  opacity: 0;
+  transform: translateY(26px);
+  transition:
+    opacity 1.4s ease,
+    transform 1.4s ease;
+}
+
+.staticHeroCopy[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.staticPortfolio {
+  padding: min(18vh, 160px) var(--gutter) 120px;
+}
+
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 56px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-auto-rows: min(24vh, 240px);
+  gap: 6px;
+}
+
+.tile {
+  position: relative;
+  grid-column: span var(--col-span);
+  grid-row: span var(--row-span);
+  padding: 0;
+  overflow: hidden;
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(36px);
+  transition:
+    opacity 1s ease var(--reveal-delay),
+    transform 1s ease var(--reveal-delay);
+}
+
+.tile[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.tileZoom {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transition: transform 1.6s var(--ease-out-expo);
+}
+
+.tile:hover .tileZoom {
+  transform: scale(1.05);
+}
+
+.tileCaption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 16px 18px;
+  background: linear-gradient(to top, rgba(10, 10, 10, 0.55), rgba(10, 10, 10, 0));
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-align: left;
+  text-transform: uppercase;
+  color: var(--ink-85);
+  pointer-events: none;
+}
+
+.about {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(300px, 1fr);
+  gap: clamp(28px, 6vw, 90px);
+  align-items: center;
+  padding: 100px var(--gutter) 140px;
+  opacity: 0;
+  transform: translateY(30px);
+  transition:
+    opacity 1.2s ease,
+    transform 1.2s ease;
+}
+
+.about[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.aboutPortrait {
+  position: relative;
+}
+
+.aboutPortraitImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+}
+
+.aboutStamp {
+  position: absolute;
+  bottom: -22px;
+  left: -22px;
+  padding: 10px 18px;
+  background: var(--bg);
+  border: 1px solid var(--ink-15);
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-70, rgba(244, 242, 238, 0.7));
+}
+
+.aboutCopy {
+  max-width: 560px;
+  justify-self: start;
+}
+
+.aboutHeading {
+  margin: 0 0 28px;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: clamp(28px, 4vw, 46px);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------- booking -- */
+
+.booking {
+  position: relative;
+  z-index: 1;
+  padding: 100px var(--gutter) 140px;
+  /* Translucent enough that the 3D backdrop's continued drift reads through
+     the section. The composite stays near-black, so text contrast is unaffected. */
+  background: linear-gradient(rgba(17, 17, 20, 0.6), rgba(17, 17, 20, 0.8));
+  opacity: 0;
+  transform: translateY(30px);
+  transition:
+    opacity 1.2s ease,
+    transform 1.2s ease;
+}
+
+.booking[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.bookingIntro {
+  max-width: 640px;
+  margin: 0 0 64px;
+}
+
+.bookingIntro .sectionTitle {
+  margin-bottom: 18px;
+}
+
+.packages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 22px;
+  margin-bottom: 32px;
+  /* Shared projection: every card's translateZ is measured against this one
+     vanishing point, so their differing depths read as one 3D space. */
+  perspective: 1200px;
+  transform-style: preserve-3d;
+}
+
+/* --- booking scroll motion -------------------------------------------------
+   `--section-progress` (0 → 1) is written to the section by useSectionProgress
+   as the viewport travels through it. Each moving part reads it directly from
+   CSS, so the whole section animates continuously with scroll at zero React
+   cost — and stays composable with the hover tilt, which lives on a separate
+   nested element.
+
+   `--depth` is that progress recentred to -0.5 → +0.5, so elements travel
+   through a neutral pose at the section's midpoint rather than starting there.
+   -------------------------------------------------------------------------- */
+.booking {
+  /* Fallback of 0.5 keeps the first paint (and any non-JS render) neutral. */
+  --depth: calc(var(--section-progress, 0.5) - 0.5);
+}
+
+/* Layer 1 of 3: one-shot entrance. Transitioned, so it must not also carry
+   the continuously-updating scroll transform. */
+.packageWrapper {
+  opacity: 0;
+  transform: translateY(28px);
+  transform-style: preserve-3d;
+  transition:
+    opacity 0.7s ease var(--reveal-delay),
+    transform 0.7s var(--ease-out-expo) var(--reveal-delay);
+}
+
+.packageWrapper[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Layer 2 of 3: continuous scroll-driven depth. Never transitioned — the
+   eased --section-progress already glides with the camera's physics. Each
+   card carries its own base Z and drift vector (--pz/--pdx/--pdy/--pdz/--pry,
+   set inline per card), so the three panels genuinely parallax against each
+   other instead of sharing one parent transform. */
+.packageDepth {
+  height: 100%;
+  transform-style: preserve-3d;
+  will-change: transform;
+  transform: translate3d(
+      calc(var(--depth) * var(--pdx, 0px)),
+      calc(var(--depth) * var(--pdy, 0px)),
+      calc(var(--pz, 0px) + var(--depth) * var(--pdz, 0px))
+    )
+    rotateY(calc(var(--depth) * var(--pry, 0deg)))
+    rotateX(calc(var(--depth) * 2deg));
+}
+
+.packageCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  padding: 32px 28px;
+  border: 1px solid var(--ink-15);
+  transform-style: preserve-3d;
+  transition: border-color 0.3s ease;
+  will-change: transform;
+}
+
+.packageCard[data-selected="true"] {
+  border-color: var(--accent);
+}
+
+/* Specular highlight tracked by useTilt through --glow-x / --glow-y. */
+.tiltGlow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    circle at var(--glow-x, 50%) var(--glow-y, 50%),
+    rgba(255, 255, 255, var(--glow-opacity, 0)),
+    transparent 60%
+  );
+  pointer-events: none;
+  transition: background 0.2s ease;
+}
+
+.packageBadge {
+  position: absolute;
+  top: -11px;
+  left: 28px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.packageName {
+  margin: 0 0 6px;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: 24px;
+  color: var(--ink);
+}
+
+.packageDuration {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-50);
+}
+
+.packagePrice {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-size: 34px;
+  color: var(--accent);
+}
+
+.packageIncludes {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.packageIncludes li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(244, 242, 238, 0.7);
+}
+
+.packageIncludes li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.packageSelect {
+  margin-top: auto;
+  padding: 13px 0;
+  background: none;
+  border: 1px solid rgba(244, 242, 238, 0.3);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    border-color 0.25s ease,
+    color 0.25s ease;
+}
+
+.packageSelect[data-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.retainerNote {
+  max-width: 560px;
+  margin: 0 0 80px;
+  font-size: 13px;
+  color: rgba(244, 242, 238, 0.45);
+}
+
+.bookingGrid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.3fr);
+  gap: clamp(28px, 6vw, 90px);
+  perspective: 1400px;
+  transform-style: preserve-3d;
+  /* The grid's own flat plane must never win hit-testing against its
+     depth-shifted children — rays pass through to the panels, which restore
+     pointer-events themselves. */
+  pointer-events: none;
+}
+
+/* The calendar and form columns are the section's far layer: a smaller depth
+   offset and gentler drift than the cards (cards ride at 22–84px, panels near
+   the page plane), so the whole section reads as layered space. The transform
+   sits on these container panels ONLY — the inputs inside remain plain,
+   untransformed DOM. useFreezeOnFocus pins the pose while focus is inside a
+   panel. Z stays positive at every drift extreme: negative Z would put the
+   panel behind ancestor hit-planes and swallow mouse clicks. */
+.farPanel {
+  pointer-events: auto;
+  transform: translate3d(
+      0,
+      calc(var(--depth) * -8px),
+      calc(8px + var(--depth) * -12px)
+    )
+    rotateX(calc(var(--depth) * 1.2deg));
+  will-change: transform;
+}
+
+/* -------------------------------------------------------------- calendar -- */
+
+.calendarLabel {
+  margin: 0 0 22px;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ink-50);
+}
+
+.weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.weekdays span {
+  padding-bottom: 6px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-align: center;
+  color: var(--ink-40);
+}
+
+/* The stage owns the perspective and the one-shot reveal; the grid inside it
+   owns the continuous scroll motion. Splitting them keeps the transitioned
+   transform off the element that updates every frame. */
+.calendarStage {
+  perspective: 900px;
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 0.8s ease 0.2s,
+    transform 0.8s var(--ease-out-expo) 0.2s;
+}
+
+.calendarStage[data-revealed="true"] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.calendar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  transform-style: preserve-3d;
+  /* Tilting the grid inside a perspective fans the cells: rows nearer the
+     viewer travel further than rows behind them, so individual cells parallax
+     against each other as the section scrolls. */
+  transform: rotateX(calc(var(--depth) * -9deg))
+    translateZ(calc(var(--depth) * -34px))
+    translateY(calc(var(--depth) * -10px));
+}
+
+.dayPad {
+  aspect-ratio: 1;
+}
+
+.day {
+  aspect-ratio: 1;
+  background: transparent;
+  border: 1px solid rgba(244, 242, 238, 0.2);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transform: translateZ(0);
+  transform-style: preserve-3d;
+  transition:
+    transform 0.3s var(--ease-out-expo),
+    box-shadow 0.3s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.day:hover:not(:disabled) {
+  transform: translateZ(14px) scale(1.08);
+  box-shadow:
+    0 10px 22px rgba(201, 163, 91, 0.28),
+    0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+.day:disabled {
+  border-color: rgba(244, 242, 238, 0.06);
+  color: rgba(244, 242, 238, 0.2);
+  cursor: default;
+}
+
+.day[data-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.calendarNote {
+  margin: 18px 0 0;
+  font-size: 12px;
+  color: var(--ink-40);
+}
+
+/* ------------------------------------------------------------------ form -- */
+
+.form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  opacity: 0;
+  transform: translateY(22px);
+  transition:
+    opacity 0.8s ease 0.3s,
+    transform 0.8s var(--ease-out-expo) 0.3s;
+}
+
+.form[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.field {
+  grid-column: span 1;
+}
+
+.fieldWide {
+  grid-column: span 2;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.fieldLabel {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-50);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 2px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--ink-25);
+  color: var(--ink);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.25s ease;
+}
+
+.input:focus,
+.textarea:focus {
+  border-bottom-color: var(--accent);
+}
+
+.textarea {
+  resize: vertical;
+}
+
+.dateReadout {
+  margin: 8px 0 0;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--ink-25);
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.dateReadout[data-empty="true"] {
+  color: var(--ink-35);
+}
+
+.pillsStage {
+  margin-top: 10px;
+  perspective: 600px;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  transform-style: preserve-3d;
+  transform: translateZ(calc(var(--depth) * -26px))
+    translateY(calc(var(--depth) * -8px))
+    rotateX(calc(var(--depth) * 4deg));
+}
+
+.pill {
+  padding: 9px 16px;
+  background: none;
+  border: 1px solid rgba(244, 242, 238, 0.3);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.pill[data-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.formError {
+  grid-column: span 2;
+  margin: 0;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.primaryButton {
+  padding: 16px 36px;
+  background: var(--accent);
+  border: none;
+  color: var(--bg);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: opacity 0.25s ease;
+}
+
+.primaryButton:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.ghostButton {
+  margin-top: 8px;
+  padding: 13px 26px;
+  background: none;
+  border: 1px solid rgba(244, 242, 238, 0.3);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.25s ease;
+}
+
+.ghostButton:hover {
+  border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------- success -- */
+
+.success {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: flex-start;
+  padding: 44px 36px;
+  border: 1px solid rgba(201, 163, 91, 0.4);
+  animation: successIn 0.5s var(--ease-out-expo);
+}
+
+@keyframes successIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.successMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  font-size: 22px;
+  color: var(--accent);
+}
+
+.successHeading {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: 26px;
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------- footer -- */
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+  padding: 80px var(--gutter) 44px;
+  opacity: 0;
+  transition: opacity 1.1s ease;
+}
+
+.footer[data-revealed="true"] {
+  opacity: 1;
+}
+
+.footerTop {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 40px;
+}
+
+.footerMark {
+  margin: 0 0 14px;
+  font-family: var(--font-display), serif;
+  font-size: 24px;
+  color: var(--ink);
+}
+
+.footerBlurb {
+  max-width: 280px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-50);
+}
+
+.footerColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.footerHeading {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-40);
+}
+
+.footerBase {
+  padding-top: 24px;
+  border-top: 1px solid var(--ink-10);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: rgba(244, 242, 238, 0.35);
+}
+
+/* -------------------------------------------------------------- lightbox -- */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(10, 10, 10, 0.97);
+}
+
+.lightboxClose {
+  position: absolute;
+  top: 28px;
+  right: var(--gutter);
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.lightboxPrev,
+.lightboxNext {
+  position: absolute;
+  top: 50%;
+  background: none;
+  border: none;
+  color: var(--ink-60);
+  font-size: 32px;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: color 0.2s ease;
+}
+
+.lightboxPrev:hover,
+.lightboxNext:hover {
+  color: var(--ink);
+}
+
+.lightboxPrev {
+  left: clamp(12px, 3vw, 40px);
+}
+
+.lightboxNext {
+  right: clamp(12px, 3vw, 40px);
+}
+
+.lightboxFrame {
+  position: relative;
+  width: min(1100px, 86vw);
+  height: min(76vh, 780px);
+}
+
+.lightboxCaption {
+  margin: 22px 0 0;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+@media (max-width: 900px) {
+  .about,
+  .bookingGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .aboutStamp {
+    left: 12px;
+  }
+
+  .journeyAbout {
+    left: var(--gutter);
+    max-width: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+    grid-auto-rows: 32vw;
+  }
+
+  /* Spans authored for a six-column grid don't survive the collapse. */
+  .tile {
+    grid-column: span 2;
+    grid-row: span 2;
+  }
+
+  .tile:nth-child(n + 4) {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+
+  .form {
+    grid-template-columns: 1fr;
+  }
+
+  .field,
+  .fieldWide,
+  .formError {
+    grid-column: span 1;
+  }
+
+  .lightbox {
+    padding: 24px;
+  }
+}
