@@ -60,15 +60,54 @@ export const CATEGORIES: Category[] = [
 
 export const TILES_PER_CATEGORY = 6;
 
-/** [columnSpan, rowSpan] for each of the six tiles in the 2D masonry grid. */
-export const SPAN_PATTERN: ReadonlyArray<readonly [number, number]> = [
-  [6, 2],
-  [3, 2],
-  [3, 2],
-  [2, 1],
-  [2, 1],
-  [2, 1],
-];
+type SpanPattern = ReadonlyArray<readonly [number, number]>;
+
+/**
+ * [columnSpan, rowSpan] per tile in the 6-column 2D grid, chosen per category
+ * so tile shapes match the orientation of the photos assigned to them
+ * (images.ts assigns in the same order):
+ *   portraits — six tall tiles
+ *   landscape — wide/cinematic tiles
+ *   weddings & fashion — alternating wide and tall (L, P, P, L, L, P)
+ */
+const SPAN_PATTERNS: Record<CategoryId, SpanPattern> = {
+  portraits: [
+    [2, 2],
+    [2, 2],
+    [2, 2],
+    [2, 2],
+    [2, 2],
+    [2, 2],
+  ],
+  landscape: [
+    [6, 2],
+    [3, 2],
+    [3, 2],
+    [2, 1],
+    [2, 1],
+    [2, 1],
+  ],
+  weddings: [
+    [4, 2],
+    [2, 2],
+    [2, 2],
+    [4, 2],
+    [4, 2],
+    [2, 2],
+  ],
+  fashion: [
+    [4, 2],
+    [2, 2],
+    [2, 2],
+    [4, 2],
+    [4, 2],
+    [2, 2],
+  ],
+};
+
+export function getSpanPattern(categoryId: CategoryId): SpanPattern {
+  return SPAN_PATTERNS[categoryId];
+}
 
 export function getCategory(id: CategoryId): Category {
   const found = CATEGORIES.find((c) => c.id === id);

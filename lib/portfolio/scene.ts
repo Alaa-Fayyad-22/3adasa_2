@@ -2,7 +2,9 @@ import * as THREE from "three";
 
 import {
   ABOUT_SLOT_ID,
+  HERO_NEAR_SLOT_ID,
   HERO_SLOT_ID,
+  imageAspect,
   imageSource,
 } from "./images";
 import {
@@ -15,7 +17,13 @@ import {
 /* Scene layout                                                               */
 /* -------------------------------------------------------------------------- */
 
-/** The six portfolio planes, arranged as a gallery wall the camera pans across. */
+/**
+ * The six portfolio planes, arranged as a gallery wall the camera pans across.
+ * `sx`/`sy` define each print's default footprint; the actual geometry is
+ * rebuilt per category so its aspect ratio matches the assigned photograph
+ * (same area, different shape) — portrait photos hang as portrait prints,
+ * landscape as landscape, with no cropping or stretching.
+ */
 const WALL_POSITIONS = [
   { x: -6, y: 1.3, z: -14.6, sx: 3.6, sy: 2.6 },
   { x: -2, y: 1.7, z: -14.0, sx: 3.2, sy: 2.3 },
@@ -128,6 +136,16 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 
 function clamp01(x: number): number {
   return Math.min(Math.max(x, 0), 1);
+}
+
+/**
+ * Plane geometry with the given aspect ratio (width / height) occupying a
+ * fixed area, so photos of different orientations hang at comparable visual
+ * weight — like prints of the same paper size in different orientations.
+ */
+function planeForAspect(aspect: number, area: number): THREE.PlaneGeometry {
+  const height = Math.sqrt(area / aspect);
+  return new THREE.PlaneGeometry(height * aspect, height);
 }
 
 /** Diagonal-hatch fallback drawn whenever a slot has no photograph yet. */
@@ -290,8 +308,10 @@ export class JourneyScene {
       transparent: true,
       opacity: 0.98,
     });
+    // A second, different landscape print floating nearer the camera than the
+    // full-bleed backdrop — the hero's two photo layers at different depths.
     this.nearMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(3.2, 4.2),
+      planeForAspect(imageAspect(HERO_NEAR_SLOT_ID) ?? 1.6, 9.0),
       this.nearMaterial,
     );
     this.nearMesh.position.set(2.4, -0.6, -1);
@@ -323,10 +343,12 @@ export class JourneyScene {
       color: 0x1a1a1c,
       transparent: true,
     });
-    this.aboutMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(3.2, 4.0),
-      this.aboutMaterial,
+    // Geometry matches the about portrait's aspect exactly — no crop.
+    const aboutGeometry = planeForAspect(
+      imageAspect(ABOUT_SLOT_ID) ?? 0.8,
+      12.8,
     );
+    this.aboutMesh = new THREE.Mesh(aboutGeometry, this.aboutMaterial);
     this.aboutMesh.position.set(-1.8, 0, -27);
 
     this.rimMaterial = new THREE.MeshBasicMaterial({
@@ -334,8 +356,9 @@ export class JourneyScene {
       transparent: true,
       opacity: 0,
     });
+    const aboutSize = aboutGeometry.parameters;
     this.rimMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(3.55, 4.35),
+      new THREE.PlaneGeometry(aboutSize.width + 0.35, aboutSize.height + 0.35),
       this.rimMaterial,
     );
     this.rimMesh.position.copy(this.aboutMesh.position);
@@ -354,16 +377,20 @@ export class JourneyScene {
         this.farMaterial.needsUpdate = true;
       },
     });
-    this.loadTexture(HERO_SLOT_ID, {
-      planeAspect: 3.2 / 4.2,
-      zoom: 1.8,
+    this.loadTexture(HERO_NEAR_SLOT_ID, {
+      planeAspect:
+        this.nearMesh.geometry instanceof THREE.PlaneGeometry
+          ? this.nearMesh.geometry.parameters.width /
+            this.nearMesh.geometry.parameters.height
+          : 1.6,
+      zoom: 1,
       apply: (t) => {
         this.nearMaterial.map = t;
         this.nearMaterial.needsUpdate = true;
       },
     });
     this.loadTexture(ABOUT_SLOT_ID, {
-      planeAspect: 3.2 / 4.0,
+      planeAspect: imageAspect(ABOUT_SLOT_ID) ?? 0.8,
       zoom: 1,
       apply: (t) => {
         this.aboutMaterial.map = t;
@@ -431,7 +458,13 @@ export class JourneyScene {
           texture.dispose();
           return;
         }
+        // sRGB decode + trilinear filtering + anisotropy so photos stay
+        // crisp at the oblique angles the wall planes sit at. (Pre-r152
+        // three used `texture.encoding = sRGBEncoding` for the same thing.)
         texture.colorSpace = THREE.SRGBColorSpace;
+        texture.magFilter = THREE.LinearFilter;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
         applyCoverFit(texture, opts.planeAspect, opts.zoom);
         this.ownedTextures.add(texture);
         opts.apply(texture);
@@ -443,9 +476,17 @@ export class JourneyScene {
 
   private loadWallTextures(): void {
     this.wallMeshes.forEach((mesh, index) => {
-      const { width, height } = mesh.geometry.parameters;
-      this.loadTexture(tileSlotId(this.category, index), {
-        planeAspect: width / height,
+      const slotId = tileSlotId(this.category, index);
+      const base = WALL_POSITIONS[index];
+
+      // Rebuild the print to match this category's photo orientation —
+      // same area as the position's default footprint, aspect from the image.
+      const aspect = imageAspect(slotId) ?? base.sx / base.sy;
+      mesh.geometry.dispose();
+      mesh.geometry = planeForAspect(aspect, base.sx * base.sy);
+
+      this.loadTexture(slotId, {
+        planeAspect: aspect,
         zoom: 1,
         apply: (texture) => {
           mesh.material.uniforms.map.value = texture;

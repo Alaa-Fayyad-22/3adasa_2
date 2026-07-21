@@ -4,7 +4,7 @@ import { useEffect, useRef, type CSSProperties } from "react";
 
 import {
   getCategory,
-  SPAN_PATTERN,
+  getSpanPattern,
   tileSlotId,
   type CategoryId,
 } from "@/lib/portfolio/content";
@@ -104,8 +104,8 @@ export function StaticShowcase({
               slotId={tileSlotId(activeCategory, index)}
               caption={caption}
               alt={`${category.label} — ${caption}`}
-              colSpan={SPAN_PATTERN[index][0]}
-              rowSpan={SPAN_PATTERN[index][1]}
+              colSpan={getSpanPattern(activeCategory)[index][0]}
+              rowSpan={getSpanPattern(activeCategory)[index][1]}
               delay={index * 70}
               onOpen={() => onOpenTile(index)}
             />
