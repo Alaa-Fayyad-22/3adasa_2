@@ -17,21 +17,60 @@ import {
 /* Scene layout                                                               */
 /* -------------------------------------------------------------------------- */
 
+/** Number of photographs per category on the 3D journey. */
+const WALL_PLANE_COUNT = 6;
+
+/* -------------------------------------------------------------------------- */
+/* Moment layout                                                              */
+/*                                                                            */
+/* The six photographs are arranged as a SEQUENCE OF MOMENTS along the        */
+/* existing camera path rather than a static scattered wall. Each moment is   */
+/* placed on the camera's own look-ray at a fixed focus distance, at a chosen */
+/* progress station — so when the visitor scrolls to that station, the        */
+/* composition sits centred, fully in frame, facing the camera, and sharp.    */
+/*                                                                            */
+/* Stations are chosen so consecutive moments are separated along the path's  */
+/* own travel (the early stations sit on the approach, the last on the exit   */
+/* plunge): the camera passes THROUGH a spent moment, which exits behind it,  */
+/* instead of leaving it parked beside the next composition. The existing     */
+/* distance-blur then reads correctly for free — a moment is sharp only when  */
+/* the camera is at its station, and the next moment ahead is strongly        */
+/* blurred until approached. The camera path itself is untouched.             */
+/* -------------------------------------------------------------------------- */
+
+/** Focus distance from camera to a moment's centre plane. */
+const FOCUS_DISTANCE_DESKTOP = 6;
+const FOCUS_DISTANCE_MOBILE = 4.5;
+
+/** Below this canvas CSS width, compose one photograph per moment. */
+const MOBILE_LAYOUT_MAX_WIDTH = 700;
+
 /**
- * The six portfolio planes, arranged as a gallery wall the camera pans across.
- * `sx`/`sy` define each print's default footprint; the actual geometry is
- * rebuilt per category so its aspect ratio matches the assigned photograph
- * (same area, different shape) — portrait photos hang as portrait prints,
- * landscape as landscape, with no cropping or stretching.
+ * Progress stations per moment count. Hand-placed against CAMERA_KEYFRAMES so
+ * consecutive stations differ meaningfully in camera position (approach depth
+ * → pan → exit depth), which is what keeps moments from overlapping at rest.
  */
-const WALL_POSITIONS = [
-  { x: -6, y: 1.3, z: -14.6, sx: 3.6, sy: 2.6 },
-  { x: -2, y: 1.7, z: -14.0, sx: 3.2, sy: 2.3 },
-  { x: 2, y: 1.7, z: -14.0, sx: 3.2, sy: 2.3 },
-  { x: 6, y: 1.3, z: -14.6, sx: 3.6, sy: 2.6 },
-  { x: -4, y: -2.0, z: -14.3, sx: 3.0, sy: 2.4 },
-  { x: 4, y: -2.0, z: -14.3, sx: 3.0, sy: 2.4 },
-];
+const MOMENT_STATIONS: Record<number, number[]> = {
+  1: [0.42],
+  2: [0.26, 0.52],
+  3: [0.24, 0.42, 0.585],
+  6: [0.23, 0.31, 0.395, 0.465, 0.535, 0.6],
+};
+
+/** Vertical keep-out for the fixed header / tab row, in CSS pixels. */
+const HEADER_KEEPOUT_PX = 170;
+
+interface PlannedPlane {
+  /** Tile index 0..5 within the category. */
+  index: number;
+  center: THREE.Vector3;
+  width: number;
+  height: number;
+  /** Camera position of this plane's station — planes face it. */
+  stationEye: THREE.Vector3;
+  /** Distance to the station eye; the blur target treats this as "sharp". */
+  sharpDistance: number;
+}
 
 /**
  * Camera path through the scene, keyed to scroll progress (`p`, 0→1 across the
@@ -262,6 +301,7 @@ export class JourneyScene {
 
   /** Smoothed scroll progress; the raw value is eased toward each frame. */
   private progress = 0;
+  private lastFrameAt = 0;
   private mouseRaw = { x: 0, y: 0 };
   private mouseSmooth = { x: 0, y: 0 };
   private hoverIndex = -1;
@@ -316,7 +356,7 @@ export class JourneyScene {
     );
     this.nearMesh.position.set(2.4, -0.6, -1);
 
-    this.wallMeshes = WALL_POSITIONS.map((p, index) => {
+    this.wallMeshes = Array.from({ length: WALL_PLANE_COUNT }, (_, index) => {
       const material = new THREE.ShaderMaterial({
         uniforms: {
           map: { value: this.placeholder },
@@ -327,16 +367,15 @@ export class JourneyScene {
         vertexShader: BLUR_VERTEX_SHADER,
         fragmentShader: BLUR_FRAGMENT_SHADER,
       });
-      const mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(p.sx, p.sy),
-        material,
-      );
-      mesh.position.set(p.x, p.y, p.z);
-      // Planes toe inward toward the centre of the wall.
-      const baseRotationY = (p.x / 10) * -0.35;
-      mesh.rotation.y = baseRotationY;
-      mesh.userData = { index, baseRotation: { x: 0, y: baseRotationY } };
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+      mesh.userData = {
+        index,
+        baseRotation: { x: 0, y: 0 },
+        sharpDistance: FOCUS_DISTANCE_DESKTOP,
+      };
       return mesh;
+      // Position, size, and facing come from applyWallLayout — deferred to
+      // loadWallTextures, which knows the active category's photo aspects.
     });
 
     this.aboutMaterial = new THREE.MeshBasicMaterial({
@@ -474,19 +513,177 @@ export class JourneyScene {
     );
   }
 
+  /* --------------------------- moment layout ----------------------------- */
+
+  /** Camera pose at a station, as vectors plus the forward/right/up frame. */
+  private stationFrame(p: number) {
+    const { pos, look } = this.interpolateCamera(p);
+    const eye = new THREE.Vector3(pos[0], pos[1], pos[2]);
+    const target = new THREE.Vector3(look[0], look[1], look[2]);
+    const forward = target.clone().sub(eye).normalize();
+    const right = new THREE.Vector3()
+      .crossVectors(forward, new THREE.Vector3(0, 1, 0))
+      .normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    return { eye, forward, right, up };
+  }
+
+  /**
+   * Plans the six planes as composed moments for the active category.
+   * All sizes derive from the viewport frustum at the focus distance, so
+   * compositions fit with margins on any screen and clear the fixed header.
+   */
+  private computeWallLayout(): PlannedPlane[] {
+    const canvas = this.options.canvas;
+    const viewW = canvas.clientWidth || window.innerWidth;
+    const viewH = canvas.clientHeight || window.innerHeight;
+    const viewAspect = viewW / viewH;
+    const isMobile = viewW < MOBILE_LAYOUT_MAX_WIDTH;
+    const D = isMobile ? FOCUS_DISTANCE_MOBILE : FOCUS_DISTANCE_DESKTOP;
+
+    // Visible half-extents at the focus distance.
+    const halfH = D * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const halfW = halfH * viewAspect;
+    // Push compositions down so nothing sits under the header / tab row —
+    // but only partially, keeping clearance above the fold as well.
+    const headerWorld = (HEADER_KEEPOUT_PX / viewH) * 2 * halfH;
+    const dropY = -headerWorld * 0.32;
+
+    const aspects = Array.from({ length: WALL_PLANE_COUNT }, (_, i) =>
+      imageAspect(tileSlotId(this.category, i)) ?? 1.5,
+    );
+    const allPortrait = aspects.every((a) => a < 1);
+
+    // Chunk into moments: singles on phones; triptychs for an all-portrait
+    // category; pairs otherwise (landscape–landscape or landscape–portrait).
+    const chunks: number[][] = isMobile
+      ? aspects.map((_, i) => [i])
+      : allPortrait
+        ? [
+            [0, 1, 2],
+            [3, 4, 5],
+          ]
+        : [
+            [0, 1],
+            [2, 3],
+            [4, 5],
+          ];
+
+    const stations = MOMENT_STATIONS[chunks.length] ?? MOMENT_STATIONS[3];
+    const planes: PlannedPlane[] = [];
+
+    chunks.forEach((chunk, k) => {
+      const { eye, forward, right, up } = this.stationFrame(stations[k]);
+      const base = eye
+        .clone()
+        .addScaledVector(forward, D)
+        .addScaledVector(up, dropY);
+
+      const place = (
+        index: number,
+        lateral: number,
+        vertical: number,
+        depth: number,
+        width: number,
+        height: number,
+      ) => {
+        const center = base
+          .clone()
+          .addScaledVector(right, lateral)
+          .addScaledVector(up, vertical)
+          .addScaledVector(forward, depth);
+        planes.push({
+          index,
+          center,
+          width,
+          height,
+          stationEye: eye,
+          sharpDistance: center.distanceTo(eye),
+        });
+      };
+
+      if (chunk.length === 1) {
+        // Single, centred, sized to fit the width with margins.
+        const a = aspects[chunk[0]];
+        let width = 2 * halfW * 0.78;
+        let height = width / a;
+        const maxH = 2 * (halfH - headerWorld / 2) * 0.8;
+        if (height > maxH) {
+          height = maxH;
+          width = height * a;
+        }
+        place(chunk[0], 0, 0, 0, width, height);
+      } else if (chunk.length === 3) {
+        // Triptych: centre print slightly forward, flanks slightly behind.
+        const [l, c, r] = chunk;
+        const hC = 2 * (halfH - headerWorld / 2) * 0.62;
+        const wC = hC * aspects[c];
+        const hF = hC * 0.82;
+        const wL = hF * aspects[l];
+        const wR = hF * aspects[r];
+        const gap = 0.24;
+        place(c, 0, 0, 0.28, wC, hC);
+        place(l, -(wC / 2 + wL / 2 + gap), -0.06, -0.7, wL, hF);
+        place(r, wC / 2 + wR / 2 + gap, -0.06, -0.7, wR, hF);
+      } else {
+        // Pair: the more landscape image larger and behind, the other
+        // smaller and nearer, offset to the opposite side.
+        const [first, second] = chunk;
+        const backIdx = aspects[first] >= aspects[second] ? first : second;
+        const frontIdx = backIdx === first ? second : first;
+
+        const usableH = 2 * (halfH - headerWorld / 2);
+        let wB = 2 * halfW * 0.42;
+        let hB = wB / aspects[backIdx];
+        const maxHB = usableH * 0.66;
+        if (hB > maxHB) {
+          hB = maxHB;
+          wB = hB * aspects[backIdx];
+        }
+        let hF = usableH * 0.56;
+        let wF = hF * aspects[frontIdx];
+        const maxWF = 2 * halfW * 0.34;
+        if (wF > maxWF) {
+          wF = maxWF;
+          hF = wF / aspects[frontIdx];
+        }
+
+        const lateralB = -(halfW * 0.26);
+        const lateralF = halfW * 0.32;
+        place(backIdx, lateralB, 0.12, -0.8, wB, hB);
+        place(frontIdx, lateralF, -0.3, 0.45, wF, hF);
+      }
+    });
+
+    return planes;
+  }
+
+  /** Applies the planned layout to the meshes: size, position, facing. */
+  private applyWallLayout(): void {
+    const planned = this.computeWallLayout();
+    for (const plan of planned) {
+      const mesh = this.wallMeshes[plan.index];
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.PlaneGeometry(plan.width, plan.height);
+      mesh.position.copy(plan.center);
+      mesh.lookAt(plan.stationEye);
+      mesh.userData.baseRotation = { x: mesh.rotation.x, y: mesh.rotation.y };
+      mesh.userData.sharpDistance = plan.sharpDistance;
+    }
+  }
+
   private loadWallTextures(): void {
+    // Compose this category's moments first — geometry aspect then matches
+    // each photograph exactly, so textures map 1:1 with no crop or stretch.
+    this.applyWallLayout();
+
     this.wallMeshes.forEach((mesh, index) => {
       const slotId = tileSlotId(this.category, index);
-      const base = WALL_POSITIONS[index];
-
-      // Rebuild the print to match this category's photo orientation —
-      // same area as the position's default footprint, aspect from the image.
-      const aspect = imageAspect(slotId) ?? base.sx / base.sy;
-      mesh.geometry.dispose();
-      mesh.geometry = planeForAspect(aspect, base.sx * base.sy);
+      const { width, height } = (mesh.geometry as THREE.PlaneGeometry)
+        .parameters;
 
       this.loadTexture(slotId, {
-        planeAspect: aspect,
+        planeAspect: width / height,
         zoom: 1,
         apply: (texture) => {
           mesh.material.uniforms.map.value = texture;
@@ -569,6 +766,9 @@ export class JourneyScene {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.sizeFarPlane();
+    // Recompose the moments for the new viewport shape (and possibly a
+    // different desktop/mobile grouping).
+    this.applyWallLayout();
   };
 
   /** Scales the backdrop plane so it always over-fills the frustum. */
@@ -656,8 +856,16 @@ export class JourneyScene {
     this.rafId = requestAnimationFrame(this.animate);
 
     const raw = this.readScrollProgress();
-    // Ease toward the true scroll position so the camera glides rather than snaps.
-    this.progress += (raw - this.progress) * 0.09;
+    // Ease toward the true scroll position so the camera glides rather than
+    // snaps. Frame-rate independent: at 60fps this is the classic 0.09/frame
+    // chase, but a throttled tab (occluded window, background) still
+    // converges instead of crawling one tiny step per sparse callback.
+    const frameNow = performance.now();
+    const dt = this.lastFrameAt
+      ? Math.min((frameNow - this.lastFrameAt) / 1000, 0.25)
+      : 1 / 60;
+    this.lastFrameAt = frameNow;
+    this.progress += (raw - this.progress) * (1 - Math.exp(-dt * 5.65));
     const p = this.progress;
     // 0 → 1 across the booking section; 0 everywhere before it.
     const bookingLocal = clamp01(
@@ -759,9 +967,12 @@ export class JourneyScene {
       mesh.rotation.x += (targetX - mesh.rotation.x) * 0.08;
       mesh.rotation.y += (targetY - mesh.rotation.y) * 0.08;
 
-      // Planes sharpen as the camera reaches its ideal viewing distance.
+      // Planes sharpen as the camera reaches their moment's station: sharp
+      // at each plane's own focus distance, strongly blurred while it still
+      // belongs to a previous or upcoming moment.
       const distance = this.camera.position.distanceTo(mesh.position);
-      const depthBlur = Math.min(Math.abs(distance - 11) / 6, 1) * 0.5;
+      const sharpAt = (mesh.userData.sharpDistance as number) ?? 6;
+      const depthBlur = Math.min(Math.abs(distance - sharpAt) / 5, 1) * 0.55;
       const target = isHit ? 0 : depthBlur;
       const uniform = mesh.material.uniforms.blur;
       uniform.value += (target - uniform.value) * 0.1;
