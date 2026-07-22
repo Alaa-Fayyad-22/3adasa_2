@@ -20,229 +20,162 @@ import {
 /** Number of photographs per category on the 3D journey. */
 const WALL_PLANE_COUNT = 6;
 
-/* -------------------------------------------------------------------------- */
-/* Moment layout                                                              */
-/*                                                                            */
-/* The six photographs are arranged as a SEQUENCE OF MOMENTS along the        */
-/* existing camera path rather than a static scattered wall. Each moment is   */
-/* placed on the camera's own look-ray at a fixed focus distance, at a chosen */
-/* progress station — so when the visitor scrolls to that station, the        */
-/* composition sits centred, fully in frame, facing the camera, and sharp.    */
-/*                                                                            */
-/* Stations are chosen so consecutive moments are separated along the path's  */
-/* own travel (the early stations sit on the approach, the last on the exit   */
-/* plunge): the camera passes THROUGH a spent moment, which exits behind it,  */
-/* instead of leaving it parked beside the next composition. The existing     */
-/* distance-blur then reads correctly for free — a moment is sharp only when  */
-/* the camera is at its station, and the next moment ahead is strongly        */
-/* blurred until approached. The camera path itself is untouched.             */
-/* -------------------------------------------------------------------------- */
-
-/** Focus distance from camera to a moment's centre plane. */
-const FOCUS_DISTANCE_DESKTOP = 6;
-const FOCUS_DISTANCE_MOBILE = 4.5;
-
-/** Below this canvas CSS width, compose one photograph per moment. */
+/** Below this canvas CSS width, use the narrower mobile field/pixel-ratio. */
 const MOBILE_LAYOUT_MAX_WIDTH = 700;
 
-/**
- * Progress stations per moment count. Hand-placed against CAMERA_KEYFRAMES so
- * consecutive stations differ meaningfully in camera position — critically,
- * spanning segments where eye.z actually changes (approach: z 6→1.2→-8; exit:
- * z -8→-19→-24), not just the pure-pan segment (p 0.3-0.55), where eye.z is
- * PINNED at -8 and eye.x is the only thing moving. Two moments placed forward
- * of two same-z pan stations land at nearly the same depth, separated only by
- * the stations' eye.x delta — which is far smaller than the frustum's width
- * at a legible focus distance, so neighbouring moments occupy overlapping
- * screen space. Spreading stations across z-varying segments, PLUS a small
- * monotonic per-moment depth push below, keeps every moment's plane in its
- * own depth band regardless of how close two stations' eye.x happen to be.
- *
- * All stations also have to sit where the "Selected Work / The Portfolio"
- * heading is fully faded in: `portfolioOpacity` in updateOverlays only
- * reaches 1 for p ∈ (0.27, 0.57) — a station outside that window rests
- * while the heading (and the still-present, always-opaque hero backdrop
- * plane behind everything) is mid-crossfade, which reads as a washed-out,
- * low-contrast frame with ghosted title text. 2 (Portraits, verified) sits
- * right at that window's edge; every other count is kept inside it.
- *
- * Counts 1/2 are the values verified against the running build — do not
- * change them without re-checking Portraits at rest. 3/4/5/6 are for
- * Landscape/Weddings/Fashion-style sequences.
- */
-const MOMENT_STATIONS: Record<number, number[]> = {
-  1: [0.42],
-  2: [0.26, 0.52],
-  3: [0.3, 0.42, 0.54],
-  4: [0.29, 0.38, 0.47, 0.555],
-  5: [0.285, 0.355, 0.425, 0.495, 0.555],
-  6: [0.28, 0.335, 0.39, 0.445, 0.5, 0.555],
-};
+/* -------------------------------------------------------------------------- */
+/* Portfolio corridor                                                        */
+/*                                                                            */
+/* UNIFIED MODEL — every category (Portraits, Landscape, Weddings, Fashion)   */
+/* runs through this exact same code path, with no per-category branching:   */
+/* the six photographs hang at FIXED world positions along the corridor the  */
+/* existing camera path (CAMERA_KEYFRAMES) already dollies through — there   */
+/* is no synthetic "dive" term and no per-moment grouping/chunking. Multiple  */
+/* photos are simply visible at once, at different distances from the live   */
+/* camera: the nearest reads sharp and large, one or two ahead read smaller  */
+/* and softer (not yet reached), and ones just passed fade out (not cut).    */
+/* Perspective projection alone already makes distant photos look smaller;   */
+/* portfolioFocusAt below only adds the blur/opacity/scale-emphasis curve on */
+/* top of that, driven purely by each photo's live distance from the camera  */
+/* — a continuous function of scroll progress `p` (no discrete states, no    */
+/* stations, nothing that "swaps" one photo for another).                   */
+/* -------------------------------------------------------------------------- */
 
-/**
- * Splits a run of `runLength` same-orientation portrait images into groups
- * of 2 or 3 — never 1 (a stranded single wouldn't compose) — alternating
- * which size it reaches for first so the grouping isn't hard-locked to
- * always maxing out at 3. `preferThree` picks the opening size; a run that
- * doesn't divide evenly (leaving a remainder of 1) backs off to the other
- * size instead of forcing the max every time.
- */
-function pickPortraitGroupSizes(
-  runLength: number,
-  preferThree: boolean,
-): number[] {
-  const sizes: number[] = [];
-  let remaining = runLength;
-  let big = preferThree;
-  while (remaining > 0) {
-    let take = Math.min(remaining, big ? 3 : 2);
-    if (remaining - take === 1) {
-      take = take === 3 ? 2 : Math.min(remaining, 3);
-    }
-    take = Math.min(Math.max(take, 2), remaining);
-    sizes.push(take);
-    remaining -= take;
-    big = !big;
-  }
-  return sizes;
-}
-
-function stationsFor(count: number): number[] {
-  return (
-    MOMENT_STATIONS[count] ??
-    Array.from(
-      { length: count },
-      (_, k) => 0.21 + (0.6 - 0.21) * (count === 1 ? 0.5 : k / (count - 1)),
-    )
-  );
-}
-
-/**
- * How each moment's planes are positioned, per frame, in `updateWallMeshes`:
- * NOT baked once into world space, but recomputed every frame relative to
- * the LIVE camera pose. At progress p, plane k sits at
- *   eye(p) + forward(p) * (D + depthOffsetBase + extraPush(|p - stationP_k|))
- *     + right(p) * lateral + up(p) * vertical
- * `extraPush` is 0 exactly at the plane's own station (so at rest the
- * composition is exactly what it was designed to be, always), and grows for
- * every OTHER moment simultaneously in view, receding and shrinking it out
- * of the way. This was the fix that actually held: baking each moment's
- * plane once at its own station's camera pose, then hoping distance-based
- * blur alone kept it out of the way from other stations, did not hold once
- * more than 2-3 moments needed to fit along the same short pan segment —
- * planes from every station ended up simultaneously inside the frustum,
- * fighting for the same screen space regardless of scroll position. Tying
- * position itself to (progress − station) makes "elsewhere" geometrically
- * impossible to confuse with "here."
- */
-/**
- * Each moment now gets a genuine flat HOLD before push/blur even begin to
- * ramp — not just an eased curve starting the instant scroll moves off the
- * station. `|progress - stationP|` has to clear the PLATEAU width first
- * (extraPush/blur pinned at 0 the whole time); only past that does the
- * RAMP take over and pull the plane out of focus. Both are derived PER
- * LAYOUT from the actual gap between that layout's own stations (see
- * computeWallLayout), proportional to however much scroll room that layout
- * actually has between compositions — a count of 2 (Portraits, stations
- * 0.26 apart) gets a long hold; 5 stations packed into the same window
- * (Landscape) get a shorter one so neighbours never overlap. These
- * constants only bound the derived values.
- */
-const MOMENT_PLATEAU_FACTOR = 0.3;
-const MOMENT_PUSH_RAMP_FACTOR = 0.16;
-const MOMENT_BLUR_RAMP_FACTOR = 0.13;
-const MOMENT_PLATEAU_MIN = 0.014;
-const MOMENT_PLATEAU_MAX = 0.22;
-const MOMENT_PUSH_RAMP_MIN = 0.018;
-const MOMENT_PUSH_RAMP_MAX = 0.11;
-const MOMENT_BLUR_RAMP_MIN = 0.014;
-const MOMENT_BLUR_RAMP_MAX = 0.09;
-/** Dwell width to use when a layout has only one station (no gap to derive from). */
-const MOMENT_RAMP_SOLO_GAP = 0.3;
-const MOMENT_PUSH_MAX = 34;
-/** How far off its own ray a fully-receded moment drifts — see parkLateral. */
-const MOMENT_PARK_RADIUS = 2.6;
-/**
- * Pulls every moment's resting position closer to the camera than its
- * sizing frustum (FOCUS_DISTANCE_*) alone would put it. Sizes are still
- * computed against the frustum at the plain focus distance — only the
- * PLACEMENT is pulled in — so the same world-size plane simply subtends a
- * bigger angle: closer and larger on screen, with every composition's own
- * internal depth stagger (triptych centre vs flanks, pair front vs back)
- * preserved exactly, just shifted as a unit.
- */
-const MOMENT_REST_DEPTH_PULL = -1.3;
-
-/**
- * Vertical keep-out for the fixed header plus the "The Portfolio" title/tab
- * block, in CSS pixels. Every moment's sizing budget is derived from the
- * frustum minus this band, so no plane can rest under the heading in any tab.
- */
-const HEADER_KEEPOUT_PX = 185;
-
-interface PlannedPlane {
-  /** Tile index 0..5 within the category. */
-  index: number;
-  /** Progress at which this moment is fully composed (extraPush = 0). */
-  stationP: number;
-  /** Offsets from the moment's anchor, along the LIVE camera's own axes. */
+interface PortfolioFieldSpec {
+  /** Fixed world position — NOT relative to the live camera pose. */
   lateral: number;
   vertical: number;
-  /** Added to the base focus distance along the live camera's forward axis. */
-  depthOffsetBase: number;
-  /**
-   * Extra lateral/vertical drift blended in ONLY as the plane recedes (0 at
-   * rest), unique per moment so that when several moments are simultaneously
-   * "elsewhere", they part in different directions instead of converging on
-   * the same point. Without this, every SINGLE-layout moment shares
-   * lateral=0 — the composition's own centring — so multiple receded
-   * singles landed on the exact same world position and stacked, several
-   * translucent shader planes blending into one small but visible artifact
-   * sitting wherever that shared point happened to project on screen.
-   */
-  parkLateral: number;
-  parkVertical: number;
-  width: number;
-  height: number;
-  /** Per-layout dwell plateau + ramp widths — see MOMENT_PLATEAU_FACTOR. */
-  plateau: number;
-  pushRamp: number;
-  blurRamp: number;
+  /** World Z. Negative, matching CAMERA_KEYFRAMES' travel direction. */
+  depth: number;
 }
+
+/**
+ * Hand-placed so consecutive photos sit at different depths along the
+ * camera's existing travel (eye.z runs roughly +1 → -19 across the active
+ * portfolio scroll band) and alternate sides, so several are on screen at
+ * once without stacking. Reused identically for all four categories — only
+ * the photo CONTENT (texture + aspect-matched geometry) varies by category.
+ */
+const PORTFOLIO_FIELD_DESKTOP: readonly PortfolioFieldSpec[] = [
+  { lateral: -1.7, vertical: 0.35, depth: -1 },
+  { lateral: 2.0, vertical: -0.45, depth: -4 },
+  { lateral: -2.3, vertical: 0.5, depth: -7 },
+  { lateral: 1.6, vertical: -0.55, depth: -10 },
+  { lateral: -1.3, vertical: 0.25, depth: -13 },
+  { lateral: 2.5, vertical: -0.35, depth: -16 },
+];
+
+/** Narrower lateral spread than desktop — a narrow viewport's frustum is narrower too. */
+const PORTFOLIO_FIELD_MOBILE: readonly PortfolioFieldSpec[] = [
+  { lateral: -0.85, vertical: 0.2, depth: -1 },
+  { lateral: 1.0, vertical: -0.25, depth: -4 },
+  { lateral: -1.1, vertical: 0.3, depth: -7 },
+  { lateral: 0.8, vertical: -0.3, depth: -10 },
+  { lateral: -0.65, vertical: 0.15, depth: -13 },
+  { lateral: 1.2, vertical: -0.2, depth: -16 },
+];
+
+/** Plane area (world units²) each photo occupies, before the focus-curve's scale multiplier. */
+const PORTFOLIO_TILE_AREA_DESKTOP = 3.6;
+const PORTFOLIO_TILE_AREA_MOBILE = 2.1;
+
+/**
+ * Distance-from-camera thresholds driving the corridor's continuous focus
+ * curve — see portfolioFocusAt. All in world units, matching the field
+ * depths above.
+ *   > FAR            : not yet reached — soft, slightly smaller
+ *   NEAR..FAR         : approaching — blends from soft/small to sharp/large
+ *   0..NEAR (either side of the camera) : sharp, full size — "the current one"
+ *   < PASS_FADE (behind the camera)     : just passed — fades out
+ *   <= PASS_GONE                        : fully invisible
+ */
+const FIELD_FAR = 8;
+const FIELD_NEAR = 2.4;
+const FIELD_PASS_FADE = 0.6;
+const FIELD_PASS_GONE = -2.4;
+// Softened from 0.55 — at FIELD_FAR the photo is meant to read as "further
+// away and slightly soft," not barely perceptible; the old max blurred it
+// past legibility while it was still meant to be the visible "approaching"
+// state.
+const FIELD_BLUR_MAX = 0.4;
+const FIELD_SCALE_NEAR = 1.15;
+// Nudged up from 0.8 — a "not yet reached" photo should still read clearly,
+// just smaller than the sharp/near pose, not shrunk enough to feel faint.
+const FIELD_SCALE_FAR = 0.88;
+
+/**
+ * Hard ceiling on how much of the viewport's vertical field of view a
+ * corridor photo's SHARP/near pose may occupy, however close the camera's
+ * fixed flight path (CAMERA_KEYFRAMES) happens to pass a given field
+ * position (PORTFOLIO_FIELD_DESKTOP/MOBILE) — two of the six hand-placed
+ * stops bring the camera within under a metre of the plane, where raw
+ * perspective alone (scale 1.15 included) would blow the photo up past
+ * 2x the frame edge-to-edge. This clamps the corridor's ambient scale (NOT
+ * the click-to-inspect "presented" pose, which is deliberately close-up) so
+ * every photo's sharpest moment reads as "comfortable middle distance —
+ * large and clear, never on top of the camera," regardless of exactly how
+ * close a given fly-by gets.
+ */
+const FIELD_MAX_SCREEN_FILL = 0.62;
+
+/**
+ * A photo's blur/scale/opacity as a pure function of its SIGNED distance
+ * along the camera's forward axis (positive = still ahead, negative =
+ * already passed) — continuous and reversible: scrubbing `p` backward
+ * retraces exactly the same curve, since it depends only on live geometry,
+ * not on any accumulated or time-based state.
+ */
+function portfolioFocusAt(localDepth: number): {
+  blur: number;
+  scale: number;
+  opacity: number;
+} {
+  // Approaching photos soften over the full FAR..NEAR range; passed photos
+  // soften faster (over a shorter distance) so they read as "just went by"
+  // rather than lingering sharp long after the camera has moved on.
+  const softT =
+    localDepth >= 0
+      ? smoothstep(FIELD_NEAR, FIELD_FAR, localDepth)
+      : smoothstep(FIELD_NEAR, FIELD_FAR, -localDepth * 1.6);
+  const blur = softT * FIELD_BLUR_MAX;
+  const scale = FIELD_SCALE_NEAR - softT * (FIELD_SCALE_NEAR - FIELD_SCALE_FAR);
+  const opacity =
+    localDepth < FIELD_PASS_FADE
+      ? smoothstep(FIELD_PASS_GONE, FIELD_PASS_FADE, localDepth)
+      : 1;
+  return { blur, scale, opacity };
+}
+
+/**
+ * Non-blocking click-to-inspect: a clicked photo eases toward a closer,
+ * larger "presented" pose directly ahead of the camera — see focusAt/
+ * updateWallMeshes — without pausing the scroll-driven corridor in any way.
+ * Any further scroll immediately cancels it (see FOCUS_DISMISS_EPSILON in
+ * animate), so there's no modal state to explicitly close.
+ */
+const FOCUS_PRESENT_DEPTH = 3.4;
+const FOCUS_PRESENT_SCALE = 1.7;
+/** Progress moved since a click before it's treated as "the user scrolled, drop the focus." */
+const FOCUS_DISMISS_EPSILON = 0.004;
 
 /** Per-mesh animation state, read/written every frame — not React state. */
 interface WallMeshState {
   index: number;
-  stationP: number;
   lateral: number;
   vertical: number;
-  depthOffsetBase: number;
-  parkLateral: number;
-  parkVertical: number;
-  plateau: number;
-  pushRamp: number;
-  blurRamp: number;
-  /** Category-switch swing rotation (radians), driven by transitionCategory. */
-  swingY: number;
+  depth: number;
   /** Smoothed hover-tilt, applied as a small local rotation after facing. */
   tiltX: number;
   tiltY: number;
-  /** |progress - stationP| from the last frame, reused by updateHover's blur. */
-  progressDelta: number;
-  /**
-   * Category-swing opacity (0→1 during transitionCategory), separate from
-   * the section-level opacity applied in updateWallMeshes so the two
-   * multiply together instead of one clobbering the other.
-   */
-  transitionOpacity: number;
+  /** Eased 0..1 — see focusAt/FOCUS_PRESENT_DEPTH. */
+  focusAmount: number;
 }
 
 /**
  * Camera path through the scene, keyed to scroll progress (`p`, 0→1 across the
  * sticky track): push through the hero, sweep left across the wall, sweep
  * right, then continue into the About plane.
- */
-/**
+ *
  * Journey progress is normalised so that 0 → 1 covers the sticky track (hero,
  * gallery wall, about). The booking section continues the same path beyond 1,
  * up to `BOOKING_PROGRESS_END`, so one scalar drives the whole page rather
@@ -266,8 +199,11 @@ const CAMERA_KEYFRAMES = [
   { p: BOOKING_PROGRESS_END, pos: [1.15, -0.72, -28.4], look: [0.4, -0.8, -32.1] },
 ] as const;
 
-/** Scroll window in which the gallery wall is close enough to be hoverable. */
+/** Scroll window in which the gallery corridor is close enough to be interactive. */
 const PORTFOLIO_RANGE: readonly [number, number] = [0.18, 0.62];
+
+/** Time-driven rise-then-fall pulse for a category switch — see transitionCategory. */
+const CATEGORY_SWITCH_DURATION = 860;
 
 /** Tint the about print brightens toward while the booking frame is lit. */
 const RIM_LIT_TINT = new THREE.Color(0xcfc8b8);
@@ -277,14 +213,111 @@ const HERO_FAR_BASE_OPACITY = 0.96;
 const HERO_NEAR_BASE_OPACITY = 0.98;
 
 /**
- * The about portrait's entrance (ISSUE 2 fix): rather than sitting fully
- * visible in the scene the whole time portfolio is on screen, it drifts in
- * from slightly further back while scaling up and fading in, timed to
- * ABOUT_MESH_FADE_IN so it only starts once the portfolio wall has fully
- * cleared per the section-opacity fix above.
+ * The gold-rimmed "keepsake" print (aboutMesh/rimMesh) now exists ONLY as
+ * the booking section's backdrop — About's own visual is the scattered
+ * tile field below. Its entrance (fade + scale-up + drift from depth) is
+ * keyed off `bookingLocal` (0 the instant booking starts) rather than
+ * scroll progress `p`, since it no longer needs to wait for the portfolio
+ * wall — the tile field already handles About's own section-clearing.
  */
-const ABOUT_ENTRANCE_SCALE_START = 0.9;
-const ABOUT_ENTRANCE_DEPTH_DRIFT = 1.4;
+const BOOKING_BACKDROP_ENTRANCE_RANGE: readonly [number, number] = [0, 0.18];
+const BOOKING_BACKDROP_SCALE_START = 0.9;
+const BOOKING_BACKDROP_DEPTH_DRIFT = 1.4;
+
+function bookingBackdropOpacityAt(bookingLocal: number): number {
+  return smoothstep(
+    BOOKING_BACKDROP_ENTRANCE_RANGE[0],
+    BOOKING_BACKDROP_ENTRANCE_RANGE[1],
+    bookingLocal,
+  );
+}
+
+/**
+ * About section: a scattered field of background photo tiles (reusing
+ * existing portfolio images — a deliberate portrait/landscape mix) plus a
+ * drifting particle field, both positioned relative to the camera's path,
+ * both cleared via the depth dive (see ABOUT_DIVE_DISTANCE) as the camera
+ * dives through them. No new assets, no separate transition system. This is
+ * its own independent mechanism — unrelated to, and untouched by, the
+ * portfolio corridor above.
+ */
+const ABOUT_FIELD_SLOT_IDS = [
+  "portfolio-portraits-0",
+  "portfolio-landscape-1",
+  "portfolio-portraits-2",
+  "portfolio-landscape-3",
+  "portfolio-fashion-0",
+  "portfolio-portraits-4",
+  "portfolio-landscape-4",
+  "portfolio-weddings-1",
+] as const;
+
+interface AboutFieldTileSpec {
+  lateral: number;
+  vertical: number;
+  depth: number;
+  rotationDeg: number;
+  scale: number;
+}
+
+/** Hand-placed: alternating sides, spread across depth so the dive passes them at different moments, a few off-centre enough to sit partly off-frame. */
+const ABOUT_FIELD_TILES: readonly AboutFieldTileSpec[] = [
+  { lateral: -3.2, vertical: 1.6, depth: 2.0, rotationDeg: -4, scale: 1.0 },
+  { lateral: 2.6, vertical: -1.2, depth: 3.2, rotationDeg: 3, scale: 0.9 },
+  { lateral: -1.6, vertical: -2.0, depth: 4.4, rotationDeg: 5, scale: 1.1 },
+  { lateral: 3.8, vertical: 0.8, depth: 5.6, rotationDeg: -2, scale: 0.85 },
+  { lateral: -4.2, vertical: -0.4, depth: 6.6, rotationDeg: 2, scale: 1.0 },
+  { lateral: 1.2, vertical: 2.2, depth: 7.6, rotationDeg: -6, scale: 0.8 },
+  { lateral: -2.4, vertical: 2.6, depth: 8.6, rotationDeg: 4, scale: 0.9 },
+  { lateral: 4.4, vertical: -2.4, depth: 9.4, rotationDeg: -3, scale: 0.75 },
+];
+
+const ABOUT_FIELD_TILE_COUNT_DESKTOP = 8;
+const ABOUT_FIELD_TILE_COUNT_MOBILE = 4;
+/** Dark multiply tint — atmospheric background, not full-contrast photos competing with the text. */
+const ABOUT_FIELD_TINT = new THREE.Color(0x39352f);
+const ABOUT_FIELD_TILE_AREA = 3.4;
+const ABOUT_FIELD_TILE_BASE_OPACITY = 0.62;
+
+const ABOUT_FIELD_FADE_IN: readonly [number, number] = [0.64, 0.74];
+/** Tiles clear well before booking starts (p=1.0), per the section-clearing rules. */
+const ABOUT_FIELD_FADE_OUT: readonly [number, number] = [0.88, 0.97];
+/** Particles persist a little longer/thinner than the tiles for atmosphere, then also clear. */
+const ABOUT_PARTICLES_FADE_OUT: readonly [number, number] = [0.92, 1.0];
+const ABOUT_PARTICLES_BASE_OPACITY = 0.5;
+const ABOUT_PARTICLE_COUNT = 46;
+
+const ABOUT_DIVE_DISTANCE = 7.5;
+const ABOUT_DIVE_RANGE: readonly [number, number] = [0.64, 0.95];
+
+function aboutDiveIntensityAt(p: number): number {
+  return smoothstep(ABOUT_DIVE_RANGE[0], ABOUT_DIVE_RANGE[1], p);
+}
+
+function aboutFieldOpacityAt(p: number): number {
+  return (
+    smoothstep(ABOUT_FIELD_FADE_IN[0], ABOUT_FIELD_FADE_IN[1], p) *
+    (1 - smoothstep(ABOUT_FIELD_FADE_OUT[0], ABOUT_FIELD_FADE_OUT[1], p))
+  );
+}
+
+function aboutParticlesOpacityAt(p: number): number {
+  return (
+    smoothstep(ABOUT_FIELD_FADE_IN[0], ABOUT_FIELD_FADE_IN[1], p) *
+    (1 -
+      smoothstep(
+        ABOUT_PARTICLES_FADE_OUT[0],
+        ABOUT_PARTICLES_FADE_OUT[1],
+        p,
+      ))
+  );
+}
+
+/** Cheap deterministic pseudo-random in [0,1) — stable across reloads, no Math.random() jitter. */
+function hash01(seed: number): number {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
 
 const BLUR_VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -294,11 +327,17 @@ const BLUR_VERTEX_SHADER = /* glsl */ `
   }
 `;
 
-/** 5x5 box blur, used to fake depth-of-field on planes away from the camera. */
+/**
+ * 5x5 box blur, used to fake depth-of-field on planes away from the camera.
+ * `tint` multiplies the sampled colour — white (1,1,1) is a no-op for the
+ * portfolio corridor photos; the About section's background tiles use a dark
+ * tint here instead of a separate material/shader, so both share one system.
+ */
 const BLUR_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D map;
   uniform float blur;
   uniform float opacity;
+  uniform vec3 tint;
   varying vec2 vUv;
   void main() {
     vec4 c = vec4(0.0);
@@ -311,25 +350,42 @@ const BLUR_FRAGMENT_SHADER = /* glsl */ `
       }
     }
     c /= total;
-    gl_FragColor = vec4(c.rgb, c.a * opacity);
+    gl_FragColor = vec4(c.rgb * tint, c.a * opacity);
   }
 `;
 
-/** Chromatic-split wipe played over the whole viewport when a tile is opened. */
-const WIPE_FRAGMENT_SHADER = /* glsl */ `
+/**
+ * Same depth-of-field effect, 3x3 (9 taps vs. the desktop shader's 25) —
+ * mobile GPUs have far less fragment-shader fill-rate than desktop, and
+ * several transparent, blurred planes can be on screen at once (corridor
+ * photos, hero, about, rim). Compiled once at construction based on
+ * viewport width, not branched per-frame, so there's no runtime cost to
+ * having two variants.
+ */
+const BLUR_FRAGMENT_SHADER_MOBILE = /* glsl */ `
   uniform sampler2D map;
-  uniform float t;
+  uniform float blur;
+  uniform float opacity;
+  uniform vec3 tint;
   varying vec2 vUv;
   void main() {
-    float split = (1.0 - t) * 0.02;
-    vec2 uv = vUv;
-    float wipe = smoothstep(uv.x - 0.05, uv.x + 0.05, t * 1.2);
-    float r = texture2D(map, uv + vec2(split, 0.0)).r;
-    float g = texture2D(map, uv).g;
-    float b = texture2D(map, uv - vec2(split, 0.0)).b;
-    gl_FragColor = vec4(r, g, b, wipe);
+    vec4 c = vec4(0.0);
+    float total = 0.0;
+    for (int x = -1; x <= 1; x++) {
+      for (int y = -1; y <= 1; y++) {
+        vec2 o = vec2(float(x), float(y)) * blur * 0.014;
+        c += texture2D(map, vUv + o);
+        total += 1.0;
+      }
+    }
+    c /= total;
+    gl_FragColor = vec4(c.rgb * tint, c.a * opacity);
   }
 `;
+
+/** Desktop devicePixelRatio cap. Mobile uses a lower one — see the constructor. */
+const PIXEL_RATIO_MAX_DESKTOP = 1.75;
+const PIXEL_RATIO_MAX_MOBILE = 1.5;
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -377,13 +433,6 @@ const PORTFOLIO_FADE_IN: readonly [number, number] = [0.2, 0.27];
 const PORTFOLIO_FADE_OUT: readonly [number, number] = [0.57, 0.64];
 const ABOUT_TEXT_FADE_IN: readonly [number, number] = [0.64, 0.71];
 const ABOUT_TEXT_FADE_OUT: readonly [number, number] = [0.9, 0.97];
-/**
- * The about PHOTOGRAPH fades in across the same window as the about text,
- * but — unlike the text — never fades back out: the plane keeps drifting
- * through the booking section as its backdrop, so hiding it again where the
- * text exits would blank out booking's own visuals.
- */
-const ABOUT_MESH_FADE_IN: readonly [number, number] = [0.64, 0.72];
 
 function heroOpacityAt(p: number): number {
   return 1 - smoothstep(HERO_FADE_OUT[0], HERO_FADE_OUT[1], p);
@@ -403,8 +452,24 @@ function aboutTextOpacityAt(p: number): number {
   );
 }
 
-function aboutMeshOpacityAt(p: number): number {
-  return smoothstep(ABOUT_MESH_FADE_IN[0], ABOUT_MESH_FADE_IN[1], p);
+/**
+ * Handoff between the portfolio corridor and About's depth-dive/tile
+ * scatter: a brief, near-opaque "dark hold" DOM overlay (see
+ * JourneyOverlays.handoff) bridging the two systems rather than extending
+ * either one into the other's territory — the corridor's last photos fade
+ * out, the screen holds near-black for a beat, then About's own entrance
+ * (tile field, particles, text — all untouched) fades up through it.
+ * Centred on p=0.64, exactly where PORTFOLIO_FADE_OUT finishes and
+ * ABOUT_FIELD_FADE_IN/ABOUT_TEXT_FADE_IN/ABOUT_DIVE_RANGE all begin, so the
+ * hold covers precisely the seam between the two mechanics and nothing more.
+ */
+const HANDOFF_RANGE: readonly [number, number] = [0.59, 0.685];
+const HANDOFF_PEAK: readonly [number, number] = [0.625, 0.655];
+
+function handoffOpacityAt(p: number): number {
+  const rise = smoothstep(HANDOFF_RANGE[0], HANDOFF_PEAK[0], p);
+  const fall = 1 - smoothstep(HANDOFF_PEAK[1], HANDOFF_RANGE[1], p);
+  return Math.min(rise, fall);
 }
 
 /**
@@ -472,6 +537,8 @@ export interface JourneyOverlays {
   portfolio: HTMLElement | null;
   portfolioCaption: HTMLElement | null;
   about: HTMLElement | null;
+  /** Dark hold bridging the portfolio corridor and About's entrance — see handoffOpacityAt. */
+  handoff: HTMLElement | null;
 }
 
 export interface JourneySceneOptions {
@@ -489,11 +556,14 @@ export interface JourneySceneOptions {
   initialCategory: CategoryId;
   onHoverChange: (index: number, caption: string) => void;
   onReady: () => void;
-}
-
-export interface ClickTarget {
-  index: number;
-  texture: THREE.Texture | null;
+  /**
+   * Advances the page's Lenis instance (smooth-scroll layer) by one frame,
+   * called first thing in the render loop so the native scroll position it
+   * drives is up to date before readScrollProgress() measures it this
+   * frame. Injected rather than imported so this class stays a plain,
+   * options-driven renderer — see Journey.tsx for the Lenis lifecycle.
+   */
+  tickLenis: () => void;
 }
 
 export class JourneyScene {
@@ -504,11 +574,14 @@ export class JourneyScene {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2(-10, -10);
+  /** Reused every frame in updateAboutField's particle loop to avoid allocating 46 Vector3s/frame. */
+  private readonly scratchVec3 = new THREE.Vector3();
 
   private readonly farMaterial: THREE.MeshBasicMaterial;
   private readonly farMesh: THREE.Mesh;
   private readonly nearMaterial: THREE.MeshBasicMaterial;
   private readonly nearMesh: THREE.Mesh;
+  /** The booking backdrop's "keepsake" print — see BOOKING_BACKDROP_ENTRANCE_RANGE. */
   private readonly aboutMaterial: THREE.MeshBasicMaterial;
   private readonly aboutMesh: THREE.Mesh;
   /**
@@ -520,22 +593,38 @@ export class JourneyScene {
    */
   private readonly rimMaterial: THREE.MeshBasicMaterial;
   private readonly rimMesh: THREE.Mesh;
+  /** The six corridor photos for the active category — see PORTFOLIO_FIELD_DESKTOP. */
   private readonly wallMeshes: THREE.Mesh<
     THREE.PlaneGeometry,
     THREE.ShaderMaterial
   >[];
+  /** About section's own visual — see ABOUT_FIELD_TILES. */
+  private readonly aboutFieldMeshes: THREE.Mesh<
+    THREE.PlaneGeometry,
+    THREE.ShaderMaterial
+  >[];
+  private readonly aboutParticles: THREE.Points;
+  private readonly aboutParticleSeeds: {
+    lateral: number;
+    vertical: number;
+    depth: number;
+    driftSeed: number;
+  }[];
 
   private category: CategoryId;
   private ownedTextures = new Set<THREE.Texture>();
   private placeholder: THREE.CanvasTexture;
+
   /**
-   * Bumped every time the active category actually changes. Seeds the
-   * portrait group-size and landscape pair choices in computeWallLayout so
-   * grouping isn't hard-locked to one fixed pattern (e.g. Portraits always
-   * maxing to 3-3) — it's stable within a single view (no flicker on
-   * resize) but varies across category switches.
+   * 0..1..0 pulse driven by transitionCategory's timer, not scroll — fades
+   * the whole corridor out, swaps textures at the peak, fades back in.
    */
-  private layoutVariant = 0;
+  private categorySwitchFade = 0;
+
+  /** Index of the clicked-to-inspect photo, or -1 — see focusAt. */
+  private focusedIndex = -1;
+  /** Scroll progress at the moment focus started; any further movement past FOCUS_DISMISS_EPSILON drops it. */
+  private focusedFromProgress = 0;
 
   /** Smoothed scroll progress; the raw value is eased toward each frame. */
   private progress = 0;
@@ -546,7 +635,32 @@ export class JourneyScene {
 
   private rafId: number | null = null;
   private disposed = false;
-  private wipeCanvas: HTMLCanvasElement | null = null;
+  /** Debounces the expensive wall-geometry rebuild in handleResize — see there. */
+  private wallLayoutResizeTimeout: number | null = null;
+  /**
+   * Cached window.innerHeight, read fresh only on a settled (debounced)
+   * resize — NOT on every animate() frame. Mobile browser chrome (the
+   * address bar) animates the real viewport height DURING scroll itself;
+   * reading it live inside readScrollProgress() meant the scroll-pixels
+   * -> progress mapping's own denominator wobbled continuously while
+   * scrolling, producing a small but real jitter in the derived `p` value
+   * even when the user's actual scroll input was steady. The About
+   * section's continuous, wide-range dive (see ABOUT_DIVE_DISTANCE) is far
+   * more sensitive to small `p` changes than the corridor's distance-based
+   * curves (which saturate quickly and mask the same jitter), which is why
+   * it only read as visible jitter there.
+   */
+  private cachedViewportHeight: number;
+  /**
+   * Cached `(pointer: fine)` match — touch devices have no hover concept, so
+   * the per-frame raycast in updateHover is skipped entirely for them rather
+   * than run every frame just to reliably miss (the pointer is never moved
+   * off-screen by a touch gesture, since touch doesn't fire `mousemove`).
+   * Click-to-inspect (focusAt) does its own independent raycast from the
+   * click/tap coordinates, so it works on touch even though hover doesn't.
+   */
+  private hasFinePointer: boolean;
+  private readonly finePointerQuery: MediaQueryList | null;
 
   constructor(options: JourneySceneOptions) {
     this.options = options;
@@ -556,13 +670,26 @@ export class JourneyScene {
     const { canvas } = options;
     const width = canvas.clientWidth || window.innerWidth;
     const height = canvas.clientHeight || window.innerHeight;
+    this.cachedViewportHeight = window.innerHeight;
+    const isMobileDevice = width < MOBILE_LAYOUT_MAX_WIDTH;
+
+    this.finePointerQuery =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(pointer: fine)")
+        : null;
+    this.hasFinePointer = this.finePointerQuery?.matches ?? !isMobileDevice;
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       alpha: true,
       antialias: true,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    this.renderer.setPixelRatio(
+      Math.min(
+        window.devicePixelRatio || 1,
+        isMobileDevice ? PIXEL_RATIO_MAX_MOBILE : PIXEL_RATIO_MAX_DESKTOP,
+      ),
+    );
     this.renderer.setSize(width, height, false);
 
     this.scene = new THREE.Scene();
@@ -600,42 +727,38 @@ export class JourneyScene {
           map: { value: this.placeholder },
           blur: { value: 0 },
           opacity: { value: 1 },
+          tint: { value: new THREE.Color(1, 1, 1) },
         },
         transparent: true,
         vertexShader: BLUR_VERTEX_SHADER,
-        fragmentShader: BLUR_FRAGMENT_SHADER,
+        fragmentShader: isMobileDevice
+          ? BLUR_FRAGMENT_SHADER_MOBILE
+          : BLUR_FRAGMENT_SHADER,
       });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
       const state: WallMeshState = {
         index,
-        stationP: 0,
         lateral: 0,
         vertical: 0,
-        depthOffsetBase: 0,
-        parkLateral: 0,
-        parkVertical: 0,
-        plateau: MOMENT_PLATEAU_MIN,
-        pushRamp: MOMENT_PUSH_RAMP_MIN,
-        blurRamp: MOMENT_BLUR_RAMP_MIN,
-        swingY: 0,
+        depth: 0,
         tiltX: 0,
         tiltY: 0,
-        progressDelta: 0,
-        transitionOpacity: 1,
+        focusAmount: 0,
       };
       mesh.userData = state;
       return mesh;
-      // Size and per-moment placement data come from applyWallLayout — the
-      // actual world position/facing is set every frame in updateWallMeshes,
-      // deferred to loadWallTextures, which knows the active category's
-      // photo aspects.
+      // Geometry (sized to each photo's own aspect) comes from
+      // applyWallGeometry, deferred to loadWallTextures, which knows the
+      // active category's photo aspects. Position/facing are live, set
+      // every frame in updateWallMeshes relative to the current camera pose.
     });
 
     this.aboutMaterial = new THREE.MeshBasicMaterial({
       color: 0x1a1a1c,
       transparent: true,
-      // Starts invisible — animate() fades it in via ABOUT_MESH_FADE_IN,
-      // only once the portfolio section has fully cleared (ISSUE 2).
+      // Starts invisible — animate() fades it in via bookingBackdropOpacityAt
+      // once the booking section actually starts (this print is the booking
+      // backdrop only now; About's own visual is the field below).
       opacity: 0,
     });
     // Geometry matches the about portrait's aspect exactly — no crop.
@@ -659,8 +782,84 @@ export class JourneyScene {
     this.rimMesh.position.copy(this.aboutMesh.position);
     this.rimMesh.position.z -= 0.06;
 
+    // About section's own visual: a scattered field of background tiles,
+    // reusing the SAME blur/tint shader as the corridor photos (tinted dark
+    // here instead of white so they read as atmosphere, not foreground
+    // photos). Positioned relative to the camera path every frame in
+    // updateAboutField.
+    this.aboutFieldMeshes = ABOUT_FIELD_TILES.map((spec, index) => {
+      const slotId = ABOUT_FIELD_SLOT_IDS[index];
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          map: { value: this.placeholder },
+          blur: { value: 0.12 + index * 0.035 },
+          opacity: { value: 0 },
+          tint: { value: ABOUT_FIELD_TINT },
+        },
+        transparent: true,
+        vertexShader: BLUR_VERTEX_SHADER,
+        fragmentShader: isMobileDevice
+          ? BLUR_FRAGMENT_SHADER_MOBILE
+          : BLUR_FRAGMENT_SHADER,
+      });
+      const geometry = planeForAspect(
+        imageAspect(slotId) ?? 1.3,
+        ABOUT_FIELD_TILE_AREA * spec.scale,
+      );
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.userData = spec;
+      return mesh;
+    });
+
+    // Small drifting dots sharing the tile field's depth space — geometry
+    // positions are rewritten every frame in updateAboutField (each point
+    // has its own depth/lateral/vertical, so the Points object itself
+    // can't just move as one rigid body).
+    const particlePositions = new Float32Array(ABOUT_PARTICLE_COUNT * 3);
+    const particleColors = new Float32Array(ABOUT_PARTICLE_COUNT * 3);
+    const warmColor = new THREE.Color(0xc9a35b);
+    const coolColor = new THREE.Color(0xf4f2ee);
+    this.aboutParticleSeeds = Array.from(
+      { length: ABOUT_PARTICLE_COUNT },
+      (_, i) => ({
+        lateral: (hash01(i * 3.1 + 1) - 0.5) * 10,
+        vertical: (hash01(i * 5.7 + 2) - 0.5) * 6,
+        depth: 1 + hash01(i * 7.3 + 3) * 9.5,
+        driftSeed: hash01(i * 11.9 + 4) * 1000,
+      }),
+    );
+    this.aboutParticleSeeds.forEach((seed, i) => {
+      const color = coolColor.clone().lerp(warmColor, hash01(i * 13.7 + 5));
+      particleColors[i * 3] = color.r;
+      particleColors[i * 3 + 1] = color.g;
+      particleColors[i * 3 + 2] = color.b;
+    });
+    const particleGeometry = new THREE.BufferGeometry();
+    particleGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(particlePositions, 3),
+    );
+    particleGeometry.setAttribute(
+      "color",
+      new THREE.BufferAttribute(particleColors, 3),
+    );
+    this.aboutParticles = new THREE.Points(
+      particleGeometry,
+      new THREE.PointsMaterial({
+        size: isMobileDevice ? 0.05 : 0.06,
+        sizeAttenuation: true,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+
     this.scene.add(this.farMesh, this.nearMesh, this.aboutMesh, this.rimMesh);
     this.wallMeshes.forEach((mesh) => this.scene.add(mesh));
+    this.aboutFieldMeshes.forEach((mesh) => this.scene.add(mesh));
+    this.scene.add(this.aboutParticles);
   }
 
   start(): void {
@@ -692,6 +891,18 @@ export class JourneyScene {
         this.aboutMaterial.needsUpdate = true;
       },
     });
+    this.aboutFieldMeshes.forEach((mesh, index) => {
+      const slotId = ABOUT_FIELD_SLOT_IDS[index];
+      const { width, height } = mesh.geometry.parameters;
+      this.loadTexture(slotId, {
+        planeAspect: width / height,
+        zoom: 1,
+        apply: (texture) => {
+          mesh.material.uniforms.map.value = texture;
+          mesh.material.needsUpdate = true;
+        },
+      });
+    });
     this.loadWallTextures();
 
     this.sizeFarPlane();
@@ -699,6 +910,7 @@ export class JourneyScene {
     window.addEventListener("mousemove", this.handleMouseMove, {
       passive: true,
     });
+    this.finePointerQuery?.addEventListener("change", this.handleFinePointerChange);
 
     this.options.onReady();
     this.rafId = requestAnimationFrame(this.animate);
@@ -707,15 +919,22 @@ export class JourneyScene {
   dispose(): void {
     this.disposed = true;
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
+    if (this.wallLayoutResizeTimeout !== null) {
+      clearTimeout(this.wallLayoutResizeTimeout);
+    }
     window.removeEventListener("resize", this.handleResize);
     window.removeEventListener("mousemove", this.handleMouseMove);
+    this.finePointerQuery?.removeEventListener(
+      "change",
+      this.handleFinePointerChange,
+    );
 
     this.ownedTextures.forEach((t) => t.dispose());
     this.ownedTextures.clear();
     this.placeholder.dispose();
 
     this.scene.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
+      if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
         object.geometry.dispose();
         const material = object.material as
           | THREE.Material
@@ -725,8 +944,6 @@ export class JourneyScene {
       }
     });
 
-    this.wipeCanvas?.remove();
-    this.wipeCanvas = null;
     this.renderer.dispose();
   }
 
@@ -754,7 +971,7 @@ export class JourneyScene {
           return;
         }
         // sRGB decode + trilinear filtering + anisotropy so photos stay
-        // crisp at the oblique angles the wall planes sit at. (Pre-r152
+        // crisp at the oblique angles the corridor planes sit at. (Pre-r152
         // three used `texture.encoding = sRGBEncoding` for the same thing.)
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.magFilter = THREE.LinearFilter;
@@ -769,9 +986,9 @@ export class JourneyScene {
     );
   }
 
-  /* --------------------------- moment layout ----------------------------- */
+  /* --------------------------- corridor layout ---------------------------- */
 
-  /** Camera pose at a station, as vectors plus the forward/right/up frame. */
+  /** Camera pose at a given progress, as vectors plus the forward/right/up frame. */
   private stationFrame(p: number) {
     const { pos, look } = this.interpolateCamera(p);
     const eye = new THREE.Vector3(pos[0], pos[1], pos[2]);
@@ -785,365 +1002,181 @@ export class JourneyScene {
   }
 
   /**
-   * Plans the six planes as composed moments for the active category.
-   * All sizes derive from the viewport frustum at the focus distance, so
-   * compositions fit with margins on any screen and clear the fixed header.
+   * Sizes each of the six corridor planes to the active category's own
+   * photo aspects, at the fixed field positions (PORTFOLIO_FIELD_DESKTOP/
+   * MOBILE) shared by every category — no per-category composition, no
+   * grouping. Does NOT set position/rotation — those are live, recomputed
+   * every frame in updateWallMeshes relative to the current camera pose.
    */
-  private computeWallLayout(): PlannedPlane[] {
+  private applyWallGeometry(): void {
     const canvas = this.options.canvas;
     const viewW = canvas.clientWidth || window.innerWidth;
-    const viewH = canvas.clientHeight || window.innerHeight;
-    const viewAspect = viewW / viewH;
     const isMobile = viewW < MOBILE_LAYOUT_MAX_WIDTH;
-    const D = isMobile ? FOCUS_DISTANCE_MOBILE : FOCUS_DISTANCE_DESKTOP;
+    const field = isMobile ? PORTFOLIO_FIELD_MOBILE : PORTFOLIO_FIELD_DESKTOP;
+    const area = isMobile
+      ? PORTFOLIO_TILE_AREA_MOBILE
+      : PORTFOLIO_TILE_AREA_DESKTOP;
 
-    // Visible half-extents at the focus distance.
-    const halfH = D * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    const halfW = halfH * viewAspect;
-    // Push compositions down into the band below the header/title block,
-    // keeping clearance above the fold as well.
-    const headerWorld = (HEADER_KEEPOUT_PX / viewH) * 2 * halfH;
-    const dropY = -headerWorld * 0.42;
-    /** Full usable height of the band below the exclusion zone. */
-    const usableH = 2 * (halfH - headerWorld / 2);
-
-    const aspects = Array.from({ length: WALL_PLANE_COUNT }, (_, i) =>
-      imageAspect(tileSlotId(this.category, i)) ?? 1.5,
-    );
-
-    // Chunk into moments from each image's ACTUAL aspect ratio — never from
-    // the category name, so backend-reassigned categories keep composing
-    // correctly whatever mix of orientations they contain:
-    //   run of ≥2 portrait-aspect images → duo/triptych (2-3, varied — see
-    //                                      pickPortraitGroupSizes, not a
-    //                                      hard-coded max-of-3 every time)
-    //   landscape image                  → single (default) or an occasional
-    //                                      side-by-side pair for variety
-    //   lone portrait beside a landscape → mixed pair under landscape rules
-    // Phones always compose one image per moment.
-    const chunks: number[][] = [];
-    if (isMobile) {
-      aspects.forEach((_, i) => chunks.push([i]));
-    } else {
-      let i = 0;
-      // At most ONE landscape-landscape pair per category — "occasional
-      // variety" per the spec, not a 50/50 alternation. Everything else
-      // landscape composes as a single. Whether this category even gets
-      // that one pair alternates with layoutVariant, so landscape framing
-      // isn't locked to the same pattern on every view either.
-      let usedLandscapePair = this.layoutVariant % 2 === 1;
-      while (i < WALL_PLANE_COUNT) {
-        if (aspects[i] < 1) {
-          let run = 1;
-          while (i + run < WALL_PLANE_COUNT && aspects[i + run] < 1) {
-            run++;
-          }
-          if (run >= 2) {
-            // preferThree alternates with layoutVariant so a run doesn't
-            // always resolve to the same fixed partition (e.g. a run of 6
-            // can land as [3,3] or [2,2,2] depending on the seed).
-            const preferThree = this.layoutVariant % 2 === 0;
-            for (const size of pickPortraitGroupSizes(run, preferThree)) {
-              chunks.push(
-                Array.from({ length: size }, (_, offset) => i + offset),
-              );
-              i += size;
-            }
-          } else if (i + 1 < WALL_PLANE_COUNT) {
-            // Lone portrait beside whatever comes next → mixed pair.
-            chunks.push([i, i + 1]);
-            i += 2;
-          } else {
-            chunks.push([i]);
-            i += 1;
-          }
-          continue;
-        }
-
-        const nextIsLandscape =
-          i + 1 < WALL_PLANE_COUNT && aspects[i + 1] >= 1;
-        const nextIsLonePortrait =
-          i + 1 < WALL_PLANE_COUNT &&
-          aspects[i + 1] < 1 &&
-          !(i + 2 < WALL_PLANE_COUNT && aspects[i + 2] < 1);
-
-        if (nextIsLandscape && !usedLandscapePair) {
-          chunks.push([i, i + 1]);
-          usedLandscapePair = true;
-          i += 2;
-        } else if (!nextIsLandscape && nextIsLonePortrait) {
-          chunks.push([i, i + 1]);
-          i += 2;
-        } else {
-          chunks.push([i]);
-          i += 1;
-        }
-      }
-    }
-
-    const stations = stationsFor(chunks.length);
-    // Derive this layout's dwell plateau + ramp from its own tightest
-    // station gap — see the comment on MOMENT_PLATEAU_FACTOR.
-    const minStationGap =
-      stations.length > 1
-        ? Math.min(
-            ...stations.slice(1).map((s, i) => s - stations[i]),
-          )
-        : MOMENT_RAMP_SOLO_GAP;
-    const plateau = Math.min(
-      Math.max(minStationGap * MOMENT_PLATEAU_FACTOR, MOMENT_PLATEAU_MIN),
-      MOMENT_PLATEAU_MAX,
-    );
-    const pushRamp = Math.min(
-      Math.max(minStationGap * MOMENT_PUSH_RAMP_FACTOR, MOMENT_PUSH_RAMP_MIN),
-      MOMENT_PUSH_RAMP_MAX,
-    );
-    const blurRamp = Math.min(
-      Math.max(minStationGap * MOMENT_BLUR_RAMP_FACTOR, MOMENT_BLUR_RAMP_MIN),
-      MOMENT_BLUR_RAMP_MAX,
-    );
-    const planes: PlannedPlane[] = [];
-
-    chunks.forEach((chunk, k) => {
-      const stationP = stations[k];
-      // Distinct receding direction per MOMENT (shared by every plane in
-      // it) so simultaneously-elsewhere moments fan out rather than
-      // collapsing onto each other — see PlannedPlane.parkLateral.
-      // Horizontal-only and alternating sides: a vertical component (an
-      // earlier version used a full circular spread) could drift a receded
-      // moment up into the header/title exclusion band or down past the
-      // fold — purely lateral parking can't.
-      const parkSide = k % 2 === 0 ? 1 : -1;
-      const parkLateral =
-        parkSide * (MOMENT_PARK_RADIUS + Math.floor(k / 2) * 2.1);
-      const parkVertical = 0;
-
-      // Sizing uses the plain focus-distance frustum (D) — every moment gets
-      // an identical size budget. There's no longer a per-moment distance
-      // fudge to compensate for: at rest each moment sits at exactly D plus
-      // its own small within-composition depth offset, via updateWallMeshes.
-      const place = (
-        index: number,
-        lateral: number,
-        vertical: number,
-        depth: number,
-        width: number,
-        height: number,
-      ) => {
-        planes.push({
-          index,
-          stationP,
-          lateral,
-          vertical: vertical + dropY,
-          // MOMENT_REST_DEPTH_PULL brings every composition closer to camera
-          // as a unit — each plane's own depth argument still sets its
-          // within-composition stagger (triptych centre vs flanks, pair
-          // front vs back) relative to the others, untouched.
-          depthOffsetBase: depth + MOMENT_REST_DEPTH_PULL,
-          parkLateral,
-          parkVertical,
-          width,
-          height,
-          plateau,
-          pushRamp,
-          blurRamp,
-        });
-      };
-
-      if (chunk.length === 1) {
-        // Single, centred in the below-header band: ~75% of viewport width
-        // for a landscape, height-capped so every margin stays clear.
-        const a = aspects[chunk[0]];
-        let width = 2 * halfW * (isMobile ? 0.78 : 0.75);
-        let height = width / a;
-        const maxH = usableH * 0.84;
-        if (height > maxH) {
-          height = maxH;
-          width = height * a;
-        }
-        place(chunk[0], 0, 0, 0, width, height);
-      } else if (chunk.length === 3) {
-        // Triptych: centre print slightly forward, flanks slightly behind.
-        const [l, c, r] = chunk;
-        const hC = usableH * 0.62;
-        const wC = hC * aspects[c];
-        const hF = hC * 0.82;
-        const wL = hF * aspects[l];
-        const wR = hF * aspects[r];
-        const gap = 0.24;
-        place(c, 0, 0, 0.28, wC, hC);
-        place(l, -(wC / 2 + wL / 2 + gap), -0.06, -0.7, wL, hF);
-        place(r, wC / 2 + wR / 2 + gap, -0.06, -0.7, wR, hF);
-      } else if (aspects[chunk[0]] < 1 && aspects[chunk[1]] < 1) {
-        // Portrait duo — same visual language as the triptych (one print
-        // forward, one flanking behind), just with a single flank instead
-        // of two, the pair centred as a unit. Was previously falling
-        // through to the landscape "back larger / front smaller" pair
-        // treatment, which is tuned for wide images and produced two small,
-        // oddly-stacked prints for two tall ones.
-        const [main, flank] = chunk;
-        const hMain = usableH * 0.62;
-        const wMain = hMain * aspects[main];
-        const hFlank = hMain * 0.82;
-        const wFlank = hFlank * aspects[flank];
-        const gap = 0.24;
-        const totalW = wMain + gap + wFlank;
-        place(main, -totalW / 2 + wMain / 2, 0, 0.28, wMain, hMain);
-        place(flank, totalW / 2 - wFlank / 2, -0.06, -0.7, wFlank, hFlank);
-      } else if (aspects[chunk[0]] >= 1 && aspects[chunk[1]] >= 1) {
-        // Two landscapes: symmetric side-by-side with a visible gap, each
-        // ~40% of viewport width, and a small depth offset for parallax.
-        const [first, second] = chunk;
-        const gap = 0.45;
-        const sized = chunk.map((index) => {
-          let w = 2 * halfW * 0.4;
-          let h = w / aspects[index];
-          const maxH = usableH * 0.68;
-          if (h > maxH) {
-            h = maxH;
-            w = h * aspects[index];
-          }
-          return { w, h };
-        });
-        place(
-          first,
-          -(sized[0].w / 2 + gap / 2),
-          0.04,
-          -0.45,
-          sized[0].w,
-          sized[0].h,
-        );
-        place(
-          second,
-          sized[1].w / 2 + gap / 2,
-          -0.12,
-          0.35,
-          sized[1].w,
-          sized[1].h,
-        );
-      } else {
-        // Mixed pair (one landscape, one portrait): the more landscape image
-        // larger and behind, the other smaller and nearer, offset to the
-        // opposite side — per spec, a mixed moment uses the landscape rules.
-        const [first, second] = chunk;
-        const backIdx = aspects[first] >= aspects[second] ? first : second;
-        const frontIdx = backIdx === first ? second : first;
-
-        let wB = 2 * halfW * 0.42;
-        let hB = wB / aspects[backIdx];
-        const maxHB = usableH * 0.66;
-        if (hB > maxHB) {
-          hB = maxHB;
-          wB = hB * aspects[backIdx];
-        }
-        let hF = usableH * 0.56;
-        let wF = hF * aspects[frontIdx];
-        const maxWF = 2 * halfW * 0.34;
-        if (wF > maxWF) {
-          wF = maxWF;
-          hF = wF / aspects[frontIdx];
-        }
-
-        const lateralB = -(halfW * 0.26);
-        const lateralF = halfW * 0.32;
-        place(backIdx, lateralB, 0.12, -0.8, wB, hB);
-        place(frontIdx, lateralF, -0.3, 0.45, wF, hF);
-      }
-    });
-
-    return planes;
-  }
-
-  /**
-   * Applies the planned layout to the meshes: geometry (size) and the
-   * per-moment placement data `updateWallMeshes` reads every frame. Does NOT
-   * set position/rotation — those are live, recomputed every frame relative
-   * to the current camera pose.
-   */
-  private applyWallLayout(): void {
-    const planned = this.computeWallLayout();
-    for (const plan of planned) {
-      const mesh = this.wallMeshes[plan.index];
+    this.wallMeshes.forEach((mesh, index) => {
+      const spec = field[index];
+      const aspect = imageAspect(tileSlotId(this.category, index)) ?? 1.5;
       mesh.geometry.dispose();
-      mesh.geometry = new THREE.PlaneGeometry(plan.width, plan.height);
+      mesh.geometry = planeForAspect(aspect, area);
       const state = mesh.userData as WallMeshState;
-      state.stationP = plan.stationP;
-      state.lateral = plan.lateral;
-      state.vertical = plan.vertical;
-      state.depthOffsetBase = plan.depthOffsetBase;
-      state.parkLateral = plan.parkLateral;
-      state.parkVertical = plan.parkVertical;
-      state.plateau = plan.plateau;
-      state.pushRamp = plan.pushRamp;
-      state.blurRamp = plan.blurRamp;
-    }
+      state.lateral = spec.lateral;
+      state.vertical = spec.vertical;
+      state.depth = spec.depth;
+    });
   }
 
   /**
-   * Positions and faces every wall plane for the CURRENT frame's progress —
-   * see the comment on MOMENT_PUSH_RAMP for why this replaced baking each
-   * plane's position once at its own station.
+   * Positions every corridor plane at its FIXED world position and drives
+   * its blur/scale/opacity from its LIVE signed distance along the
+   * camera's forward axis — see portfolioFocusAt. A clicked plane
+   * (focusAmount > 0) blends toward a closer, larger "presented" pose on
+   * top of that, without touching anything else.
    */
-  private updateWallMeshes(p: number, sectionOpacity: number): void {
-    const canvas = this.options.canvas;
-    const viewW = canvas.clientWidth || window.innerWidth;
-    const D =
-      viewW < MOBILE_LAYOUT_MAX_WIDTH
-        ? FOCUS_DISTANCE_MOBILE
-        : FOCUS_DISTANCE_DESKTOP;
-    const { eye, forward, right, up } = this.stationFrame(p);
+  private updateWallMeshes(sectionOpacity: number, dt: number): void {
+    const eye = this.camera.position;
+    const forward = new THREE.Vector3();
+    this.camera.getWorldDirection(forward);
+    const wallFade = sectionOpacity * (1 - this.categorySwitchFade);
+    // Half-height of the frustum at one world unit of distance — multiplying
+    // by a mesh's true distance-from-camera gives the visible height budget
+    // at that distance, used below to cap how large its sharp pose can grow.
+    const halfFovTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
 
     this.wallMeshes.forEach((mesh) => {
       const state = mesh.userData as WallMeshState;
-      const delta = p - state.stationP;
-      // Flat hold first (see MOMENT_PLATEAU_FACTOR): only the scroll beyond
-      // the plateau counts toward the push ramp, so the plane stays exactly
-      // as composed for a real dwell period before it starts moving at all.
-      const pastPlateau = Math.max(0, Math.abs(delta) - state.plateau);
-      const t = clamp01(pastPlateau / state.pushRamp);
-      const parkT = t * t; // ease-in, matches extraPush's own easing
-      const extraPush = parkT * MOMENT_PUSH_MAX;
-      const restDepth = D + state.depthOffsetBase;
+      mesh.position.set(state.lateral, state.vertical, state.depth);
 
-      // Recede STRAIGHT BACK along the ray from the eye through this plane's
-      // resting position — not just further along the shared forward axis.
-      // Scaling only depth (forward) while lateral/vertical stayed fixed
-      // made a receding plane's projected screen position slide toward
-      // dead-centre as it moved away (angular position = lateral/depth, and
-      // depth was growing while lateral held still). Scaling lateral/vertical
-      // by the same ratio keeps the ray's direction constant as it shrinks —
-      // but that alone isn't enough: every SINGLE-layout moment shares
-      // lateral=0 (centred is centred), so multiple simultaneously-receded
-      // singles still converged on each other's ray. parkLateral/Vertical
-      // blends in a per-moment drift as it recedes (0 at rest) so they fan
-      // out to different corners instead of stacking.
-      const rayScale = restDepth > 0 ? (restDepth + extraPush) / restDepth : 1;
-      const effLateral = state.lateral + parkT * state.parkLateral;
-      const effVertical = state.vertical + parkT * state.parkVertical;
+      const toMesh = this.scratchVec3.copy(mesh.position).sub(eye);
+      const localDepth = toMesh.dot(forward);
+      const trueDistance = toMesh.length();
+      const { blur, scale, opacity } = portfolioFocusAt(localDepth);
 
-      mesh.position
-        .copy(eye)
-        .addScaledVector(forward, restDepth + extraPush)
-        .addScaledVector(right, effLateral * rayScale)
-        .addScaledVector(up, effVertical * rayScale);
-      mesh.lookAt(eye);
-      if (state.swingY) mesh.rotateY(state.swingY);
+      // See FIELD_MAX_SCREEN_FILL: bounds the ambient (non-focused) scale so
+      // a close fly-by can't blow the photo up past a comfortable size,
+      // however tight PORTFOLIO_FIELD_DESKTOP/MOBILE happens to place it
+      // relative to the camera's path at that moment.
+      const planeHeight = mesh.geometry.parameters.height;
+      const maxVisibleHeight = 2 * halfFovTan * trueDistance * FIELD_MAX_SCREEN_FILL;
+      const cappedScale = Math.min(scale, maxVisibleHeight / planeHeight);
 
+      const targetFocus = state.index === this.focusedIndex ? 1 : 0;
+      state.focusAmount +=
+        (targetFocus - state.focusAmount) * (1 - Math.exp(-dt * 10));
+
+      if (state.focusAmount > 0.001) {
+        const presented = eye
+          .clone()
+          .addScaledVector(forward, FOCUS_PRESENT_DEPTH);
+        mesh.position.lerp(presented, state.focusAmount);
+      }
+      // Screen-aligned (parallel to the camera's own image plane), NOT
+      // mesh.lookAt(eye) (which faces the camera's POSITION instead of its
+      // VIEW DIRECTION) — lookAt is correct for something dead-centre, but
+      // for a photo close to the camera and off to one side, "facing the
+      // camera position" tilts it away from the camera's actual image
+      // plane, and perspective projects that tilt as real keystone/skew
+      // distortion (a rectangle rendering as a distorted quadrilateral,
+      // worst at close range with a lateral offset — exactly this corridor's
+      // close, off-centre passes). Copying the camera's own orientation
+      // keeps every photo a clean, undistorted rectangle at any distance.
+      mesh.quaternion.copy(this.camera.quaternion);
+      if (state.tiltX) mesh.rotateX(state.tiltX);
+      if (state.tiltY) mesh.rotateY(state.tiltY);
+
+      const finalScale = THREE.MathUtils.lerp(
+        cappedScale,
+        FOCUS_PRESENT_SCALE,
+        state.focusAmount,
+      );
+      mesh.scale.setScalar(finalScale);
+
+      const uniforms = mesh.material.uniforms;
+      uniforms.blur.value = THREE.MathUtils.lerp(blur, 0, state.focusAmount);
       // Section-level fade (ROOT CAUSE fix): a plane only ever renders
-      // opaque while the portfolio section is actually active. Multiplied
-      // with the category-swing opacity so the two compose instead of one
-      // clobbering the other — see transitionCategory.
-      mesh.material.uniforms.opacity.value =
-        state.transitionOpacity * sectionOpacity;
-
-      state.progressDelta = delta;
+      // opaque while the portfolio section is actually active. The
+      // corridor's own distance-based opacity and the focus blend both
+      // compose with it rather than either clobbering the other.
+      uniforms.opacity.value =
+        THREE.MathUtils.lerp(opacity, 1, state.focusAmount) * wallFade;
     });
   }
 
+  /**
+   * Positions and fades the About section's tile field + particles —
+   * mirrors updateWallMeshes's pattern (recomputed every frame relative to
+   * the LIVE camera pose via stationFrame) but with no per-station
+   * push/blur math: these aren't sequential moments, they're a persistent
+   * field the camera dives through continuously (see aboutDiveIntensityAt),
+   * so a tile's only per-frame state is its section-opacity fade and a
+   * small blur boost while the dive is active.
+   */
+  private updateAboutField(p: number): void {
+    const canvas = this.options.canvas;
+    const isMobile =
+      (canvas.clientWidth || window.innerWidth) < MOBILE_LAYOUT_MAX_WIDTH;
+    const activeTileCount = isMobile
+      ? ABOUT_FIELD_TILE_COUNT_MOBILE
+      : ABOUT_FIELD_TILE_COUNT_DESKTOP;
+    const sectionOpacity = aboutFieldOpacityAt(p);
+    const diveIntensity = aboutDiveIntensityAt(p);
+    const { eye, forward, right, up } = this.stationFrame(p);
+
+    this.aboutFieldMeshes.forEach((mesh, index) => {
+      const spec = ABOUT_FIELD_TILES[index];
+      mesh.position
+        .copy(eye)
+        .addScaledVector(forward, spec.depth)
+        .addScaledVector(right, spec.lateral)
+        .addScaledVector(up, spec.vertical);
+      // Screen-aligned, not lookAt(eye) — see the identical fix and comment
+      // in updateWallMeshes; the About dive can bring a tile close enough
+      // to the camera for the same keystone risk.
+      mesh.quaternion.copy(this.camera.quaternion);
+      mesh.rotateZ(THREE.MathUtils.degToRad(spec.rotationDeg));
+
+      const active = index < activeTileCount;
+      mesh.material.uniforms.opacity.value = active
+        ? sectionOpacity * ABOUT_FIELD_TILE_BASE_OPACITY
+        : 0;
+      mesh.material.uniforms.blur.value =
+        0.12 + index * 0.035 + diveIntensity * 0.18;
+    });
+
+    const particleMaterial = this.aboutParticles
+      .material as THREE.PointsMaterial;
+    particleMaterial.opacity =
+      aboutParticlesOpacityAt(p) * ABOUT_PARTICLES_BASE_OPACITY;
+
+    const positions = this.aboutParticles.geometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+    const now = Date.now();
+    this.aboutParticleSeeds.forEach((seed, i) => {
+      const driftLateral = Math.sin(now * 0.00012 + seed.driftSeed) * 0.4;
+      const driftVertical = Math.cos(now * 0.00009 + seed.driftSeed) * 0.3;
+      this.scratchVec3
+        .copy(eye)
+        .addScaledVector(forward, seed.depth)
+        .addScaledVector(right, seed.lateral + driftLateral)
+        .addScaledVector(up, seed.vertical + driftVertical);
+      positions.setXYZ(
+        i,
+        this.scratchVec3.x,
+        this.scratchVec3.y,
+        this.scratchVec3.z,
+      );
+    });
+    positions.needsUpdate = true;
+  }
+
   private loadWallTextures(): void {
-    // Compose this category's moments first — geometry aspect then matches
-    // each photograph exactly, so textures map 1:1 with no crop or stretch.
-    this.applyWallLayout();
+    // Size this category's planes to its own photo aspects first — textures
+    // then map 1:1 with no crop or stretch.
+    this.applyWallGeometry();
 
     this.wallMeshes.forEach((mesh, index) => {
       const slotId = tileSlotId(this.category, index);
@@ -1162,60 +1195,49 @@ export class JourneyScene {
   }
 
   /**
-   * Swings the wall out, swaps in the new category's textures, swings it back.
-   * `commit` fires at the midpoint so React state flips while the wall is hidden.
+   * Fades the whole corridor out, swaps in the new category's textures,
+   * fades it back in. `commit` fires at the midpoint so React state flips
+   * while the corridor is fully hidden — a time-driven rise-then-fall pulse
+   * (categorySwitchFade, consumed by updateWallMeshes) rather than
+   * scroll-driven, since switching tabs is a click, not a scroll gesture.
+   * Any active click-focus is dropped so it can't survive into the new
+   * category's photos.
    */
   transitionCategory(next: CategoryId, commit: () => void): void {
     if (next === this.category) return;
-    this.layoutVariant++;
+    this.focusedIndex = -1;
 
-    const DURATION = 420;
-    const swingOutStart = performance.now();
+    const start = performance.now();
+    let swapped = false;
 
-    // swingY is an ADDITIONAL local rotation applied on top of whatever
-    // facing updateWallMeshes computes this frame — not a replacement for
-    // it — so the swing plays correctly no matter where the camera is.
-    const swingIn = (start: number) => {
-      const step = (now: number) => {
-        if (this.disposed) return;
-        const k = Math.min((now - start) / DURATION, 1);
-        this.wallMeshes.forEach((mesh) => {
-          const state = mesh.userData as WallMeshState;
-          state.swingY = -(1 - k) * 1.1;
-          state.transitionOpacity = k;
-        });
-        if (k < 1) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
-    };
-
-    const swingOut = (now: number) => {
+    const step = (now: number) => {
       if (this.disposed) return;
-      const k = Math.min((now - swingOutStart) / DURATION, 1);
-      this.wallMeshes.forEach((mesh) => {
-        const state = mesh.userData as WallMeshState;
-        state.swingY = k * 1.1;
-        state.transitionOpacity = 1 - k;
-      });
+      const t = clamp01((now - start) / CATEGORY_SWITCH_DURATION);
+      const rise = t < 0.5;
+      const half = rise ? t * 2 : (1 - t) * 2;
+      this.categorySwitchFade = smoothstep(0, 1, half);
 
-      if (k < 1) {
-        requestAnimationFrame(swingOut);
-        return;
+      if (!swapped && t >= 0.5) {
+        swapped = true;
+        this.category = next;
+        commit();
+        this.loadWallTextures();
       }
 
-      this.category = next;
-      commit();
-      this.loadWallTextures();
-      swingIn(performance.now());
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        this.categorySwitchFade = 0;
+      }
     };
 
-    requestAnimationFrame(swingOut);
+    requestAnimationFrame(step);
   }
 
   /** Keeps the scene's notion of the active category in sync with React. */
   syncCategory(next: CategoryId): void {
     if (next === this.category) return;
-    this.layoutVariant++;
+    this.focusedIndex = -1;
     this.category = next;
     this.loadWallTextures();
   }
@@ -1231,19 +1253,43 @@ export class JourneyScene {
     );
   };
 
+  /** Covers a device rotation or an external pointing device being attached/removed mid-session. */
+  private handleFinePointerChange = (event: MediaQueryListEvent) => {
+    this.hasFinePointer = event.matches;
+  };
+
   private handleResize = () => {
     const canvas = this.options.canvas;
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     if (!width || !height) return;
 
+    // Cheap, correctness-critical updates run on every resize event —
+    // otherwise the frustum would be visibly wrong for a frame or two.
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.sizeFarPlane();
-    // Recompose the moments for the new viewport shape (and possibly a
-    // different desktop/mobile grouping).
-    this.applyWallLayout();
+
+    // applyWallGeometry() is NOT cheap — it disposes and rebuilds geometry
+    // for every corridor plane. Mobile browsers fire `resize` as the
+    // address bar animates in/out, which happens mid-SCROLL (scrolling down
+    // hides it), so an undebounced rebuild here landed a synchronous
+    // geometry rebuild in the middle of a scroll gesture. Debouncing
+    // collapses a burst of resize events (address-bar animation, or a
+    // drag-resize on desktop) into a single rebuild once things settle,
+    // instead of one per event.
+    if (this.wallLayoutResizeTimeout !== null) {
+      clearTimeout(this.wallLayoutResizeTimeout);
+    }
+    this.wallLayoutResizeTimeout = window.setTimeout(() => {
+      this.wallLayoutResizeTimeout = null;
+      if (this.disposed) return;
+      // Refreshed here (settled), not read live every frame — see
+      // cachedViewportHeight.
+      this.cachedViewportHeight = window.innerHeight;
+      this.applyWallGeometry();
+    }, 150);
   };
 
   /** Scales the backdrop plane so it always over-fills the frustum. */
@@ -1255,19 +1301,27 @@ export class JourneyScene {
   }
 
   /**
-   * The tile currently under the pointer, or null when the wall isn't in
-   * range. Returns the live texture so the caller can play a wipe from it.
+   * Click/tap-to-inspect: raycasts fresh from the given screen coordinates
+   * (NOT from the hover-only `pointer`, which touch never moves) so this
+   * works identically on desktop and touch. Brings the hit photo into a
+   * closer, larger "presented" pose — see FOCUS_PRESENT_DEPTH and
+   * updateWallMeshes — WITHOUT pausing or blocking the scroll-driven
+   * corridor in any way; any further scroll drops it again (see animate).
    */
-  getClickTarget(): ClickTarget | null {
-    if (this.hoverIndex < 0) return null;
+  focusAt(clientX: number, clientY: number): void {
     const [from, to] = PORTFOLIO_RANGE;
-    if (this.progress < from || this.progress > to) return null;
+    if (this.progress < from || this.progress > to) return;
 
-    const mesh = this.wallMeshes[this.hoverIndex];
-    return {
-      index: this.hoverIndex,
-      texture: (mesh?.material.uniforms.map.value as THREE.Texture) ?? null,
-    };
+    const ndc = new THREE.Vector2(
+      (clientX / window.innerWidth) * 2 - 1,
+      -((clientY / window.innerHeight) * 2 - 1),
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.intersectObjects(this.wallMeshes)[0];
+    if (!hit) return;
+
+    this.focusedIndex = hit.object.userData.index as number;
+    this.focusedFromProgress = this.progress;
   }
 
   /* ----------------------------- render loop ----------------------------- */
@@ -1281,8 +1335,11 @@ export class JourneyScene {
    * than the value saturating and the camera going static.
    */
   private readScrollProgress(): number {
+    // cachedViewportHeight, not a live window.innerHeight read — see its
+    // declaration for why (mobile address-bar jitter).
+    const viewportHeight = this.cachedViewportHeight;
     const trackRect = this.options.track.getBoundingClientRect();
-    const trackScrollable = trackRect.height - window.innerHeight;
+    const trackScrollable = trackRect.height - viewportHeight;
     const trackProgress =
       trackScrollable > 0 ? clamp01(-trackRect.top / trackScrollable) : 0;
 
@@ -1295,7 +1352,7 @@ export class JourneyScene {
     // 0 as the section's top touches the viewport bottom, 1 once its bottom
     // has risen to the viewport bottom.
     const bookingLocal = clamp01(
-      (window.innerHeight - rect.top) / rect.height,
+      (viewportHeight - rect.top) / rect.height,
     );
     if (bookingLocal <= 0) return trackProgress;
 
@@ -1330,22 +1387,42 @@ export class JourneyScene {
     if (this.disposed) return;
     this.rafId = requestAnimationFrame(this.animate);
 
+    // Advance Lenis FIRST — it owns the native scroll position now (see
+    // scroll.ts), so readScrollProgress()'s getBoundingClientRect() reads
+    // must happen after this frame's Lenis update, not before it.
+    this.options.tickLenis();
+
     const raw = this.readScrollProgress();
-    // Ease toward the true scroll position so the camera glides rather than
-    // snaps. Frame-rate independent: at 60fps this is the classic 0.09/frame
-    // chase, but a throttled tab (occluded window, background) still
-    // converges instead of crawling one tiny step per sparse callback.
+    // Lenis is now the PRIMARY smoothing layer: it delivers an already-eased
+    // scroll position (touch included, via syncTouch — see initLenis), so
+    // this chase is no longer absorbing raw native-scroll burstiness the
+    // way it used to. It's kept only as a light safety net (Lenis not yet
+    // initialized on the very first frame or two, a stray large jump) —
+    // deliberately snappier than before so it doesn't add a second layer of
+    // lag on top of Lenis's own easing, which would read as sluggish input
+    // response rather than a smooth glide.
     const frameNow = performance.now();
     const dt = this.lastFrameAt
       ? Math.min((frameNow - this.lastFrameAt) / 1000, 0.25)
       : 1 / 60;
     this.lastFrameAt = frameNow;
-    this.progress += (raw - this.progress) * (1 - Math.exp(-dt * 5.65));
+    this.progress += (raw - this.progress) * (1 - Math.exp(-dt * 12));
     const p = this.progress;
     // 0 → 1 across the booking section; 0 everywhere before it.
     const bookingLocal = clamp01(
       (p - TRACK_PROGRESS_END) / (BOOKING_PROGRESS_END - TRACK_PROGRESS_END),
     );
+
+    // A click-focused photo is dismissed the moment the user scrolls again
+    // — no explicit close, nothing that blocks the dive: the dive itself
+    // never paused in the first place (the camera path below is driven by
+    // `p` exactly as always), this only stops re-presenting the photo.
+    if (
+      this.focusedIndex >= 0 &&
+      Math.abs(p - this.focusedFromProgress) > FOCUS_DISMISS_EPSILON
+    ) {
+      this.focusedIndex = -1;
+    }
 
     this.mouseSmooth.x += (this.mouseRaw.x - this.mouseSmooth.x) * 0.05;
     this.mouseSmooth.y += (this.mouseRaw.y - this.mouseSmooth.y) * 0.05;
@@ -1355,15 +1432,28 @@ export class JourneyScene {
     const offsetY = -this.mouseSmooth.y * drift * 1.6;
 
     const cam = this.interpolateCamera(p);
+    // About's depth dive: dolly eye AND look-target forward together by the
+    // same amount, along the CURRENT forward direction, so viewing direction
+    // and FOV stay fixed and it reads as flying forward through space, not a
+    // zoom. The portfolio corridor needs no such synthetic term — its
+    // photos sit at fixed world positions and the camera's own existing
+    // path already carries it past them continuously (see updateWallMeshes).
+    const camPos = new THREE.Vector3(cam.pos[0], cam.pos[1], cam.pos[2]);
+    const camLook = new THREE.Vector3(cam.look[0], cam.look[1], cam.look[2]);
+    const camForward = camLook.clone().sub(camPos).normalize();
+    const diveOffset = aboutDiveIntensityAt(p) * ABOUT_DIVE_DISTANCE;
+    camPos.addScaledVector(camForward, diveOffset);
+    camLook.addScaledVector(camForward, diveOffset);
+
     this.camera.position.set(
-      cam.pos[0] + offsetX,
-      cam.pos[1] + offsetY,
-      cam.pos[2],
+      camPos.x + offsetX,
+      camPos.y + offsetY,
+      camPos.z,
     );
     this.camera.lookAt(
-      cam.look[0] + offsetX * 0.5,
-      cam.look[1] + offsetY * 0.5,
-      cam.look[2],
+      camLook.x + offsetX * 0.5,
+      camLook.y + offsetY * 0.5,
+      camLook.z,
     );
 
     const now = Date.now();
@@ -1388,16 +1478,16 @@ export class JourneyScene {
     const aboutLocal = smoothstep(0.6, 0.9, p);
     const bookingEase = smoothstep(0, 1, bookingLocal);
 
-    // ISSUE 2 fix: the about portrait animates in (fade + slight scale +
-    // drift from depth) once the portfolio wall has fully cleared, instead
-    // of sitting fully visible in the scene the whole time portfolio is
-    // being viewed. Shares ABOUT_MESH_FADE_IN with the opacity below so the
-    // fade, scale, and depth drift all resolve together.
-    const aboutEntrance = aboutMeshOpacityAt(p);
-    this.aboutMaterial.opacity = aboutEntrance;
+    // This print now exists ONLY as the booking backdrop (About's own
+    // visual is the tile field in updateAboutField) — its entrance (fade +
+    // slight scale + drift from depth) is keyed off bookingLocal, so it
+    // stays cleared through the whole About section and only animates in
+    // once booking actually starts.
+    const backdropEntrance = bookingBackdropOpacityAt(bookingLocal);
+    this.aboutMaterial.opacity = backdropEntrance;
     this.aboutMesh.scale.setScalar(
-      ABOUT_ENTRANCE_SCALE_START +
-        (1 - ABOUT_ENTRANCE_SCALE_START) * aboutEntrance,
+      BOOKING_BACKDROP_SCALE_START +
+        (1 - BOOKING_BACKDROP_SCALE_START) * backdropEntrance,
     );
 
     this.aboutMesh.rotation.y =
@@ -1409,7 +1499,9 @@ export class JourneyScene {
     this.aboutMesh.position.x = -1.8 + bookingEase * 2.6;
     this.aboutMesh.position.y = bookingEase * -1.05;
     this.aboutMesh.position.z =
-      -27 + bookingEase * 1.6 + (1 - aboutEntrance) * ABOUT_ENTRANCE_DEPTH_DRIFT;
+      -27 +
+      bookingEase * 1.6 +
+      (1 - backdropEntrance) * BOOKING_BACKDROP_DEPTH_DRIFT;
 
     // The gold frame rides with the plane and only exists during booking.
     // Its brightness is what makes the drift visible against the scrim; the
@@ -1425,11 +1517,13 @@ export class JourneyScene {
     // (once supplied) brightens with the frame instead of staying a hole.
     this.aboutMaterial.color.setHex(0x1a1a1c).lerp(RIM_LIT_TINT, bookingEase);
 
-    // Wall planes are positioned fresh every frame from the live camera —
-    // must happen before hover raycasting (which needs current positions)
-    // and before the tilt in updateHover applies its ON TOP of this frame's
-    // freshly-computed facing.
-    this.updateWallMeshes(p, portfolioOpacityAt(p));
+    // Corridor planes are positioned fresh every frame from the live camera
+    // (their WORLD position is fixed, but rendering needs the current
+    // camera to face/scale/blur them against) — must happen before hover
+    // raycasting (which needs current positions) and before the tilt in
+    // updateHover applies its ON TOP of this frame's freshly-computed facing.
+    this.updateWallMeshes(portfolioOpacityAt(p), dt);
+    this.updateAboutField(p);
     this.updateHover();
     this.updateOverlays(p);
 
@@ -1440,8 +1534,17 @@ export class JourneyScene {
     const [from, to] = PORTFOLIO_RANGE;
     const inRange = this.progress > from && this.progress < to;
 
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = inRange ? this.raycaster.intersectObjects(this.wallMeshes) : [];
+    // Touch has no hover concept, and `pointer` is only ever moved by a real
+    // `mousemove` event (which touch doesn't fire) — so on touch this ray
+    // would reliably miss anyway, but intersectObjects still does the
+    // ray-vs-6-planes work every single frame for zero payoff. Skip it
+    // outright rather than run it to fail. Click-to-inspect (focusAt) does
+    // its own independent raycast, so touch taps still work without this.
+    let hits: THREE.Intersection[] = [];
+    if (inRange && this.hasFinePointer) {
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      hits = this.raycaster.intersectObjects(this.wallMeshes);
+    }
     const hit = hits[0];
     const hitIndex = hit ? (hit.object.userData.index as number) : -1;
 
@@ -1460,9 +1563,9 @@ export class JourneyScene {
 
       // The hovered plane tips toward the cursor's position within it. This
       // is a SMOOTHED LOCAL tilt, not a target for mesh.rotation directly —
-      // updateWallMeshes already set the base facing+swing this frame via
-      // lookAt, so the tilt is applied as a small additional rotation on
-      // top, fresh each frame rather than accumulated.
+      // updateWallMeshes already set the base facing this frame via lookAt,
+      // so the tilt is applied as a small additional rotation there, fresh
+      // each frame rather than accumulated.
       let targetTiltX = 0;
       let targetTiltY = 0;
       if (isHit && hit.uv) {
@@ -1471,21 +1574,6 @@ export class JourneyScene {
       }
       state.tiltX += (targetTiltX - state.tiltX) * 0.08;
       state.tiltY += (targetTiltY - state.tiltY) * 0.08;
-      if (state.tiltX) mesh.rotateX(state.tiltX);
-      if (state.tiltY) mesh.rotateY(state.tiltY);
-
-      // Sharp through the plateau around this plane's own moment (see
-      // MOMENT_PLATEAU_FACTOR), blurred only once scroll has carried past
-      // that hold in either direction.
-      const pastPlateauBlur = Math.max(
-        0,
-        Math.abs(state.progressDelta) - state.plateau,
-      );
-      const tb = clamp01(pastPlateauBlur / state.blurRamp);
-      const depthBlur = tb * tb * 0.55;
-      const target = isHit ? 0 : depthBlur;
-      const uniform = mesh.material.uniforms.blur;
-      uniform.value += (target - uniform.value) * 0.1;
     });
   }
 
@@ -1520,74 +1608,16 @@ export class JourneyScene {
     }
     if (overlays.about) {
       overlays.about.style.opacity = String(aboutOpacity);
-      overlays.about.style.transform = `translateY(-50%) translateX(${
+      // .journeyAbout is centered via flex now (see the CSS), not
+      // transform — this is purely the entrance slide, not a positioning
+      // transform, so it no longer needs to replicate any centering.
+      overlays.about.style.transform = `translateX(${
         (1 - aboutOpacity) * 18
       }px)`;
     }
+    if (overlays.handoff) {
+      overlays.handoff.style.opacity = String(handoffOpacityAt(p));
+    }
     this.options.canvas.style.opacity = String(canvasOpacity);
-  }
-
-  /* ------------------------------ wipe FX -------------------------------- */
-
-  /**
-   * Full-screen chromatic wipe from the clicked plane's texture, run on a
-   * throwaway renderer so the main loop keeps its own state.
-   */
-  playRevealTransition(texture: THREE.Texture | null, onDone: () => void): void {
-    if (!texture) {
-      onDone();
-      return;
-    }
-
-    if (!this.wipeCanvas) {
-      const canvas = document.createElement("canvas");
-      canvas.style.cssText =
-        "position:fixed;inset:0;z-index:500;pointer-events:none;width:100%;height:100%;";
-      document.body.appendChild(canvas);
-      this.wipeCanvas = canvas;
-    }
-
-    const canvas = this.wipeCanvas;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    canvas.style.display = "block";
-
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    renderer.setSize(window.innerWidth, window.innerHeight, false);
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    const material = new THREE.ShaderMaterial({
-      uniforms: { map: { value: texture }, t: { value: 0 } },
-      vertexShader:
-        "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }",
-      fragmentShader: WIPE_FRAGMENT_SHADER,
-      transparent: true,
-    });
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
-    scene.add(quad);
-
-    const start = performance.now();
-    const DURATION = 480;
-
-    const step = (now: number) => {
-      const k = Math.min((now - start) / DURATION, 1);
-      material.uniforms.t.value = k;
-      renderer.render(scene, camera);
-
-      if (k < 1) {
-        requestAnimationFrame(step);
-        return;
-      }
-
-      canvas.style.display = "none";
-      quad.geometry.dispose();
-      material.dispose();
-      renderer.dispose();
-      onDone();
-    };
-
-    requestAnimationFrame(step);
   }
 }

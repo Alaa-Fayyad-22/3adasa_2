@@ -25,9 +25,15 @@
   box-sizing: border-box;
 }
 
-html {
-  scroll-behavior: smooth;
-}
+/*
+ * No `scroll-behavior: smooth` here. Lenis (see lib/portfolio/scroll.ts)
+ * owns smooth scrolling for the immersive journey and calls its own
+ * `.scrollTo()` with its own duration/easing when active; layering the
+ * browser's native smooth-scroll under that double-eases every Lenis
+ * scrollTo call. The `behavior: "smooth"` passed explicitly in scroll.ts's
+ * native-scrollTo fallback (used when Lenis isn't active — flat mode,
+ * reduced motion) still works per-call without this global rule.
+ */
 
 body {
   margin: 0;

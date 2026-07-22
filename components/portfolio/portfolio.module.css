@@ -430,13 +430,43 @@
   pointer-events: none;
 }
 
+/*
+ * Fills the stage and centers its content via flex, not `top/left` +
+ * `transform: translate(-50%,-50%)` — the render loop writes a fresh
+ * `style.transform` here every frame for the fade+slide entrance (see
+ * updateOverlays), which would silently overwrite (not compose with) a
+ * transform-based centering. Flex centering doesn't depend on transform at
+ * all, so the two no longer fight.
+ */
 .journeyAbout {
   position: absolute;
+  inset: 0;
   z-index: 3;
-  top: 50%;
-  right: var(--gutter);
-  max-width: min(520px, 42vw);
-  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--gutter);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.journeyAboutInner {
+  max-width: min(560px, 50vw);
+}
+
+/*
+ * Dark hold bridging the portfolio iris mechanic's last close and About's own
+ * entrance (tile scatter + particles, untouched) — see handoffOpacityAt in
+ * scene.ts, which drives this element's opacity every frame. z-index 4 (one
+ * above the other .sceneStage overlays, all at 3) so it can briefly cover
+ * whichever of them is mid-fade during the seam without either needing to
+ * know about it.
+ */
+.journeyHandoff {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: var(--bg);
   opacity: 0;
   pointer-events: none;
 }
@@ -1286,9 +1316,8 @@
     left: 12px;
   }
 
-  .journeyAbout {
-    left: var(--gutter);
-    max-width: none;
+  .journeyAboutInner {
+    max-width: min(480px, 84vw);
   }
 }
 

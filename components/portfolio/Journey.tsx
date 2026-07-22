@@ -4,7 +4,13 @@ import { useEffect, useRef } from "react";
 
 import { getCategory, type CategoryId } from "@/lib/portfolio/content";
 import { JourneyScene } from "@/lib/portfolio/scene";
-import { BOOKING_SECTION_ID, SCENE_TRACK_ID } from "@/lib/portfolio/scroll";
+import {
+  BOOKING_SECTION_ID,
+  disposeLenis,
+  getLenis,
+  initLenis,
+  SCENE_TRACK_ID,
+} from "@/lib/portfolio/scroll";
 import { CategoryFilter } from "./CategoryFilter";
 import styles from "./portfolio.module.css";
 
@@ -42,15 +48,23 @@ export function Journey({
   const portfolioRef = useRef<HTMLDivElement>(null);
   const portfolioCaptionRef = useRef<HTMLDivElement>(null);
   const aboutRef = useRef<HTMLDivElement>(null);
+  const handoffRef = useRef<HTMLDivElement>(null);
 
   // Latest callbacks, read from inside the render loop without re-creating it.
-  const handlers = useRef({ onHoverChange, onOpenTile, onReady });
-  handlers.current = { onHoverChange, onOpenTile, onReady };
+  const handlers = useRef({ onHoverChange, onReady });
+  handlers.current = { onHoverChange, onReady };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const track = trackRef.current;
     if (!canvas || !track) return;
+
+    // Lenis is created here — the immersive journey mounting IS the signal
+    // that full motion is wanted (Portfolio only renders this component
+    // when motion isn't reduced and WebGL is available), so there's no
+    // separate reduced-motion check to duplicate. Created before
+    // scene.start() so the very first animate() frame already has it.
+    initLenis();
 
     const scene = new JourneyScene({
       canvas,
@@ -66,10 +80,12 @@ export function Journey({
         portfolio: portfolioRef.current,
         portfolioCaption: portfolioCaptionRef.current,
         about: aboutRef.current,
+        handoff: handoffRef.current,
       }),
       onHoverChange: (index, caption) =>
         handlers.current.onHoverChange(index, caption),
       onReady: () => handlers.current.onReady(),
+      tickLenis: () => getLenis()?.raf(performance.now()),
     });
 
     sceneRef.current = scene;
@@ -78,6 +94,7 @@ export function Journey({
     return () => {
       scene.dispose();
       sceneRef.current = null;
+      disposeLenis();
     };
     // Rebuilt only if the parallax setting changes; category and callbacks are
     // pushed in through refs and dedicated effects instead.
@@ -88,8 +105,11 @@ export function Journey({
     sceneRef.current?.syncCategory(activeCategory);
   }, [activeCategory]);
 
-  // Clicking anywhere over a hovered plane opens it — the canvas itself is
-  // pointer-transparent, so the listener lives on the window.
+  // Clicking (or tapping) a corridor photo brings it into a closer, larger
+  // "presented" view without pausing the scroll-driven dive — see
+  // JourneyScene.focusAt. The canvas itself is pointer-transparent, so the
+  // listener lives on the window. `click` fires for taps too, so this works
+  // the same way on touch.
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
       const scene = sceneRef.current;
@@ -99,12 +119,7 @@ export function Journey({
       const target = event.target as HTMLElement | null;
       if (target?.closest("button, a, input, textarea, select, label")) return;
 
-      const hit = scene.getClickTarget();
-      if (!hit) return;
-
-      scene.playRevealTransition(hit.texture, () =>
-        handlers.current.onOpenTile(hit.index),
-      );
+      scene.focusAt(event.clientX, event.clientY);
     };
 
     window.addEventListener("click", handleClick);
@@ -160,20 +175,27 @@ export function Journey({
           </div>
 
           <div ref={aboutRef} className={styles.journeyAbout}>
-            <p className={styles.eyebrow}>About</p>
-            <h2 className={styles.journeyAboutHeading}>
-              A practice built on waiting for the frame that doesn&rsquo;t need
-              explaining.
-            </h2>
-            <p className={styles.bodyCopy}>
-              Jad Daou works at the edge of light — where coastline meets fog,
-              and portraiture becomes landscape.
-            </p>
-            <p className={styles.bodyCopy}>
-              Prints and limited-edition works are available by request. For
-              sessions, see below.
-            </p>
+            <div className={styles.journeyAboutInner}>
+              <p className={styles.eyebrow}>About</p>
+              <h2 className={styles.journeyAboutHeading}>
+                A practice built on waiting for the frame that doesn&rsquo;t
+                need explaining.
+              </h2>
+              <p className={styles.bodyCopy}>
+                Jad Daou works at the edge of light — where coastline meets
+                fog, and portraiture becomes landscape.
+              </p>
+              <p className={styles.bodyCopy}>
+                Prints and limited-edition works are available by request.
+                For sessions, see below.
+              </p>
+            </div>
           </div>
+
+          {/* Bridges the portfolio iris mechanic and About's own
+              depth-dive/tile-scatter entrance — see handoffOpacityAt in
+              scene.ts. A brief dark hold, not a rebuild of either system. */}
+          <div ref={handoffRef} className={styles.journeyHandoff} aria-hidden="true" />
         </div>
       </div>
 

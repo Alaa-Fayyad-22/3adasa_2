@@ -157,17 +157,33 @@ export function useSectionProgress(enabled: boolean) {
       let frame = 0;
       let current = 0;
       let target = 0;
+      // Cached, not read live in measure() — mobile browser chrome (the
+      // address bar) animates the real viewport height DURING scroll
+      // itself, so a live read here made this section's own progress
+      // wobble in step with that, independent of actual scroll input.
+      // Refreshed only once resize events settle, matching the scene's
+      // own resize-debounce.
+      let cachedViewportHeight = window.innerHeight;
+      let resizeSettleTimeout = 0;
 
       const measure = () => {
         const rect = element.getBoundingClientRect();
         if (rect.height <= 0) return;
         target = Math.min(
-          Math.max((window.innerHeight - rect.top) / rect.height, 0),
+          Math.max((cachedViewportHeight - rect.top) / rect.height, 0),
           1,
         );
       };
 
       const step = () => {
+        // Measured HERE, inside the rAF step — never inside the scroll
+        // handler. A native `scroll` event can fire many times per rendered
+        // frame during touch momentum scrolling; reading layout on every one
+        // of those (getBoundingClientRect forces a synchronous style/layout
+        // flush) is real main-thread cost tied to raw input rate rather than
+        // display rate. Collapsing it to "at most once per rAF" matches the
+        // same read-only-inside-the-loop discipline the 3D scene uses.
+        measure();
         frame = 0;
         current += (target - current) * PROGRESS_CHASE;
         if (Math.abs(target - current) < 0.0008) current = target;
@@ -176,19 +192,27 @@ export function useSectionProgress(enabled: boolean) {
       };
 
       const onScroll = () => {
-        measure();
         if (!frame) frame = requestAnimationFrame(step);
+      };
+
+      const onResize = () => {
+        window.clearTimeout(resizeSettleTimeout);
+        resizeSettleTimeout = window.setTimeout(() => {
+          cachedViewportHeight = window.innerHeight;
+        }, 150);
+        onScroll();
       };
 
       measure();
       current = target;
       element.style.setProperty("--section-progress", target.toFixed(4));
       window.addEventListener("scroll", onScroll, { passive: true });
-      window.addEventListener("resize", onScroll);
+      window.addEventListener("resize", onResize);
 
       return () => {
         window.removeEventListener("scroll", onScroll);
-        window.removeEventListener("resize", onScroll);
+        window.removeEventListener("resize", onResize);
+        window.clearTimeout(resizeSettleTimeout);
         if (frame) cancelAnimationFrame(frame);
       };
     },
