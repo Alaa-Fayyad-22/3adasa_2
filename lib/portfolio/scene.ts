@@ -42,8 +42,19 @@ const MOBILE_LAYOUT_MAX_WIDTH = 700;
 /* -------------------------------------------------------------------------- */
 
 interface PortfolioFieldSpec {
-  /** Fixed world position — NOT relative to the live camera pose. */
-  lateral: number;
+  /**
+   * World Y offset only — there is deliberately no lateral (X) field here.
+   * X is pinned to the camera's own live X every frame (see
+   * updateWallMeshes), so a photo's only axis of motion relative to the
+   * viewer is depth: it approaches from far away and passes near/through
+   * the camera, never drifting toward either screen edge. An earlier
+   * version carried a per-photo `lateral` world offset (alternating sides
+   * to avoid stacking); combined with CAMERA_KEYFRAMES' own sideways sweep
+   * (eye.x runs -3.5 → 3.5 through the middle of this band), a fixed-world
+   * lateral offset meant photos drifted off-centre — sometimes clear off
+   * one edge with an empty gap on the other — as the camera swung. Removed
+   * entirely rather than zeroed, so it can't come back.
+   */
   vertical: number;
   /** World Z. Negative, matching CAMERA_KEYFRAMES' travel direction. */
   depth: number;
@@ -52,32 +63,39 @@ interface PortfolioFieldSpec {
 /**
  * Hand-placed so consecutive photos sit at different depths along the
  * camera's existing travel (eye.z runs roughly +1 → -19 across the active
- * portfolio scroll band) and alternate sides, so several are on screen at
- * once without stacking. Reused identically for all four categories — only
- * the photo CONTENT (texture + aspect-matched geometry) varies by category.
+ * portfolio scroll band), so several are on screen at once without
+ * stacking. Reused identically for all four categories — only the photo
+ * CONTENT (texture + aspect-matched geometry) varies by category.
  */
 const PORTFOLIO_FIELD_DESKTOP: readonly PortfolioFieldSpec[] = [
-  { lateral: -1.7, vertical: 0.35, depth: -1 },
-  { lateral: 2.0, vertical: -0.45, depth: -4 },
-  { lateral: -2.3, vertical: 0.5, depth: -7 },
-  { lateral: 1.6, vertical: -0.55, depth: -10 },
-  { lateral: -1.3, vertical: 0.25, depth: -13 },
-  { lateral: 2.5, vertical: -0.35, depth: -16 },
+  { vertical: 0.35, depth: -1 },
+  { vertical: -0.45, depth: -4 },
+  { vertical: 0.5, depth: -7 },
+  { vertical: -0.55, depth: -10 },
+  { vertical: 0.25, depth: -13 },
+  { vertical: -0.35, depth: -16 },
 ];
 
-/** Narrower lateral spread than desktop — a narrow viewport's frustum is narrower too. */
 const PORTFOLIO_FIELD_MOBILE: readonly PortfolioFieldSpec[] = [
-  { lateral: -0.85, vertical: 0.2, depth: -1 },
-  { lateral: 1.0, vertical: -0.25, depth: -4 },
-  { lateral: -1.1, vertical: 0.3, depth: -7 },
-  { lateral: 0.8, vertical: -0.3, depth: -10 },
-  { lateral: -0.65, vertical: 0.15, depth: -13 },
-  { lateral: 1.2, vertical: -0.2, depth: -16 },
+  { vertical: 0.2, depth: -1 },
+  { vertical: -0.25, depth: -4 },
+  { vertical: 0.3, depth: -7 },
+  { vertical: -0.3, depth: -10 },
+  { vertical: 0.15, depth: -13 },
+  { vertical: -0.2, depth: -16 },
 ];
 
-/** Plane area (world units²) each photo occupies, before the focus-curve's scale multiplier. */
+/**
+ * Plane area (world units²) each photo occupies, before the focus-curve's
+ * scale multiplier. The camera's vertical FOV (see PerspectiveCamera below)
+ * is identical on mobile and desktop, so a photo's apparent SCREEN-height
+ * fraction at a given distance depends only on this area, not on viewport
+ * width — a narrower mobile viewport is not a reason to shrink it. Sized
+ * slightly ABOVE desktop's instead: mobile screens are viewed from closer,
+ * so photos need to read comfortably large, not smaller.
+ */
 const PORTFOLIO_TILE_AREA_DESKTOP = 3.6;
-const PORTFOLIO_TILE_AREA_MOBILE = 2.1;
+const PORTFOLIO_TILE_AREA_MOBILE = 4.4;
 
 /**
  * Distance-from-camera thresholds driving the corridor's continuous focus
@@ -161,7 +179,6 @@ const FOCUS_DISMISS_EPSILON = 0.004;
 /** Per-mesh animation state, read/written every frame — not React state. */
 interface WallMeshState {
   index: number;
-  lateral: number;
   vertical: number;
   depth: number;
   /** Smoothed hover-tilt, applied as a small local rotation after facing. */
@@ -184,11 +201,36 @@ interface WallMeshState {
 const TRACK_PROGRESS_END = 1.0;
 const BOOKING_PROGRESS_END = 1.4;
 
+/**
+ * DIAGNOSED STALL (fixed below): the p:0.3→0.55 leg used to hold eye.z at a
+ * constant -8 across a full quarter of total scroll progress (Δp=0.25, the
+ * single largest span in the whole keyframe list) — it only swept sideways
+ * (x: -3.5 → 3.5), never advancing forward. Since the portfolio corridor's
+ * photos are hung at FIXED WORLD DEPTHS (see PORTFOLIO_FIELD_DESKTOP/MOBILE)
+ * and which one reads as "current" is driven purely by eye.z's live distance
+ * to that depth, a frozen eye.z meant scrolling through that entire quarter
+ * of progress advanced no photo at all — a dead plateau — while the next leg
+ * (p:0.55→0.64, Δp=0.09) then had to rush eye.z from -8 to -19 (more than
+ * half the whole corridor's depth span) in under a tenth of the progress
+ * range, so several photos snapped past in a rush right as the section was
+ * already fading out. Uniformly reducing scroll sensitivity (SCROLL_TO_DIVE_
+ * RATE) made this uneven pacing much more perceptible, since the already-
+ * large dead span now costs 3x the physical scroll to cross.
+ *
+ * Fix: re-paced eye.z at the p:0.3 and p:0.55 keyframes (and only z — x/y and
+ * the "sweep left, sweep right" character are untouched) so eye.z advances at
+ * a constant rate across the whole p:0.16→0.64 span instead of stalling then
+ * rushing. `look`'s z keeps the same -6 offset from `pos`'s z used throughout
+ * this stretch. This is a pacing fix to the camera path itself — the single
+ * source every category's corridor reads its "current" photo from — not a
+ * per-photo or per-category patch, so it applies uniformly everywhere this
+ * path is used.
+ */
 const CAMERA_KEYFRAMES = [
   { p: 0.0, pos: [0, 0, 6], look: [0, 0, -4] },
   { p: 0.16, pos: [0, 0, 1.2], look: [0, 0, -4] },
-  { p: 0.3, pos: [-3.5, 0.2, -8], look: [-3.5, 0.2, -14] },
-  { p: 0.55, pos: [3.5, 0.2, -8], look: [3.5, 0.2, -14] },
+  { p: 0.3, pos: [-3.5, 0.2, -4.8], look: [-3.5, 0.2, -10.8] },
+  { p: 0.55, pos: [3.5, 0.2, -15.2], look: [3.5, 0.2, -21.2] },
   { p: 0.64, pos: [0, 0.1, -19], look: [0, 0, -25] },
   { p: 0.85, pos: [1.4, 0.3, -24], look: [-1.8, 0, -27] },
   { p: 1.0, pos: [0, 0.15, -25], look: [-1, 0, -29] },
@@ -253,6 +295,16 @@ const ABOUT_FIELD_SLOT_IDS = [
 ] as const;
 
 interface AboutFieldTileSpec {
+  /**
+   * World X offset (via the camera's `right` vector — see updateAboutField),
+   * intentionally REINSTATED here after being removed from the portfolio
+   * corridor. This is a deliberate, section-scoped divergence, not a
+   * reversion of that fix: About's tile field is meant to sit toward the
+   * left/right thirds of the frame so the centre stays clear for the text
+   * block, whereas the corridor's photos are the sole subject and must stay
+   * dead-centre. Do not copy this field or its use back onto
+   * PortfolioFieldSpec/PORTFOLIO_FIELD_DESKTOP/MOBILE/updateWallMeshes.
+   */
   lateral: number;
   vertical: number;
   depth: number;
@@ -260,28 +312,55 @@ interface AboutFieldTileSpec {
   scale: number;
 }
 
-/** Hand-placed: alternating sides, spread across depth so the dive passes them at different moments, a few off-centre enough to sit partly off-frame. */
+/**
+ * Hand-placed, spread across depth so the dive passes them at different
+ * moments. Depths start considerably further out than the corridor's own
+ * field (6–22.5 vs. the booking dive's ABOUT_DIVE_DISTANCE of 7.5) so the
+ * nearest tile is still genuinely distant — small, soft — at the moment
+ * About's entrance fade finishes (see ABOUT_FIELD_FADE_IN), then visibly
+ * approaches and passes as the dive intensifies through ABOUT_DIVE_RANGE,
+ * rather than already reading "arrived" the instant it fades in. `lateral`
+ * alternates left/right, magnitude ~2.6–4.2, so every tile clears the
+ * centre column the About text sits in (see .journeyAboutInner's
+ * max-width) while still combining with the depth motion above — tiles
+ * approach from far away along a path offset to one side, not a static
+ * side-grid.
+ */
 const ABOUT_FIELD_TILES: readonly AboutFieldTileSpec[] = [
-  { lateral: -3.2, vertical: 1.6, depth: 2.0, rotationDeg: -4, scale: 1.0 },
-  { lateral: 2.6, vertical: -1.2, depth: 3.2, rotationDeg: 3, scale: 0.9 },
-  { lateral: -1.6, vertical: -2.0, depth: 4.4, rotationDeg: 5, scale: 1.1 },
-  { lateral: 3.8, vertical: 0.8, depth: 5.6, rotationDeg: -2, scale: 0.85 },
-  { lateral: -4.2, vertical: -0.4, depth: 6.6, rotationDeg: 2, scale: 1.0 },
-  { lateral: 1.2, vertical: 2.2, depth: 7.6, rotationDeg: -6, scale: 0.8 },
-  { lateral: -2.4, vertical: 2.6, depth: 8.6, rotationDeg: 4, scale: 0.9 },
-  { lateral: 4.4, vertical: -2.4, depth: 9.4, rotationDeg: -3, scale: 0.75 },
+  { lateral: -3.2, vertical: 1.6, depth: 6.0, rotationDeg: -4, scale: 1.0 },
+  { lateral: 2.6, vertical: -1.2, depth: 8.0, rotationDeg: 3, scale: 0.9 },
+  { lateral: -1.6, vertical: -2.0, depth: 10.0, rotationDeg: 5, scale: 1.1 },
+  { lateral: 3.8, vertical: 0.8, depth: 12.5, rotationDeg: -2, scale: 0.85 },
+  { lateral: -4.2, vertical: -0.4, depth: 15.0, rotationDeg: 2, scale: 1.0 },
+  { lateral: 2.8, vertical: 2.2, depth: 17.5, rotationDeg: -6, scale: 0.8 },
+  { lateral: -3.0, vertical: 2.6, depth: 20.0, rotationDeg: 4, scale: 0.9 },
+  { lateral: 4.4, vertical: -2.4, depth: 22.5, rotationDeg: -3, scale: 0.75 },
 ];
 
 const ABOUT_FIELD_TILE_COUNT_DESKTOP = 8;
 const ABOUT_FIELD_TILE_COUNT_MOBILE = 4;
-/** Dark multiply tint — atmospheric background, not full-contrast photos competing with the text. */
-const ABOUT_FIELD_TINT = new THREE.Color(0x39352f);
+/**
+ * Multiply tint — atmospheric background, not full-contrast photos
+ * competing with the text. Lightened from 0x39352f (~22% brightness),
+ * which combined with the opacity below multiplied photos down far enough
+ * to read as barely-distinguishable from the black page background.
+ */
+const ABOUT_FIELD_TINT = new THREE.Color(0x726a5c);
 const ABOUT_FIELD_TILE_AREA = 3.4;
-const ABOUT_FIELD_TILE_BASE_OPACITY = 0.62;
+const ABOUT_FIELD_TILE_BASE_OPACITY = 0.8;
 
 const ABOUT_FIELD_FADE_IN: readonly [number, number] = [0.64, 0.74];
-/** Tiles clear well before booking starts (p=1.0), per the section-clearing rules. */
-const ABOUT_FIELD_FADE_OUT: readonly [number, number] = [0.88, 0.97];
+/**
+ * Tiles clear before booking starts (p=1.0), per the section-clearing
+ * rules — but ending this at 0.97 (design-audit finding) left a ~3%-of-
+ * track stretch (about 14vh of scroll) where the sticky stage was still
+ * pinned full-screen with nothing left drawn in it: About's tiles/text
+ * had already faded, and the booking backdrop (aboutMesh) only starts
+ * its own fade-in once bookingLocal > 0, which lands almost exactly at
+ * p=1.0. Ending the fade-out right at the unpin point removes that dead
+ * gap without touching the entrance timing at all.
+ */
+const ABOUT_FIELD_FADE_OUT: readonly [number, number] = [0.88, 0.995];
 /** Particles persist a little longer/thinner than the tiles for atmosphere, then also clear. */
 const ABOUT_PARTICLES_FADE_OUT: readonly [number, number] = [0.92, 1.0];
 const ABOUT_PARTICLES_BASE_OPACITY = 0.5;
@@ -432,7 +511,8 @@ const HERO_FADE_OUT: readonly [number, number] = [0.08, 0.16];
 const PORTFOLIO_FADE_IN: readonly [number, number] = [0.2, 0.27];
 const PORTFOLIO_FADE_OUT: readonly [number, number] = [0.57, 0.64];
 const ABOUT_TEXT_FADE_IN: readonly [number, number] = [0.64, 0.71];
-const ABOUT_TEXT_FADE_OUT: readonly [number, number] = [0.9, 0.97];
+/** Matches ABOUT_FIELD_FADE_OUT's end — see the comment there. */
+const ABOUT_TEXT_FADE_OUT: readonly [number, number] = [0.9, 0.995];
 
 function heroOpacityAt(p: number): number {
   return 1 - smoothstep(HERO_FADE_OUT[0], HERO_FADE_OUT[1], p);
@@ -738,7 +818,6 @@ export class JourneyScene {
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
       const state: WallMeshState = {
         index,
-        lateral: 0,
         vertical: 0,
         depth: 0,
         tiltX: 0,
@@ -1023,7 +1102,6 @@ export class JourneyScene {
       mesh.geometry.dispose();
       mesh.geometry = planeForAspect(aspect, area);
       const state = mesh.userData as WallMeshState;
-      state.lateral = spec.lateral;
       state.vertical = spec.vertical;
       state.depth = spec.depth;
     });
@@ -1048,7 +1126,16 @@ export class JourneyScene {
 
     this.wallMeshes.forEach((mesh) => {
       const state = mesh.userData as WallMeshState;
-      mesh.position.set(state.lateral, state.vertical, state.depth);
+      // X pinned to the camera's own live X (not a fixed world value): the
+      // camera path sweeps sideways through this band (CAMERA_KEYFRAMES),
+      // so a photo fixed in world X would appear to slide toward an edge
+      // as the camera swung, however it was placed. Depth (Z) stays a
+      // genuinely fixed world position, which is what produces the
+      // approach/pass-through motion as the camera dollies through it — Y
+      // keeps its small hand-placed offset so consecutive photos don't
+      // stack exactly on top of one another, but X is never anything but
+      // "dead ahead of the camera."
+      mesh.position.set(eye.x, eye.y + state.vertical, state.depth);
 
       const toMesh = this.scratchVec3.copy(mesh.position).sub(eye);
       const localDepth = toMesh.dot(forward);
@@ -1127,6 +1214,9 @@ export class JourneyScene {
 
     this.aboutFieldMeshes.forEach((mesh, index) => {
       const spec = ABOUT_FIELD_TILES[index];
+      // `right*lateral` intentionally present here — see AboutFieldTileSpec's
+      // `lateral` doc comment. Depth still does all the approach motion;
+      // lateral only shifts where along the frame that approach happens.
       mesh.position
         .copy(eye)
         .addScaledVector(forward, spec.depth)
