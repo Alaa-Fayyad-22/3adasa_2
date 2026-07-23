@@ -340,6 +340,21 @@ const ABOUT_FIELD_TILES: readonly AboutFieldTileSpec[] = [
 const ABOUT_FIELD_TILE_COUNT_DESKTOP = 8;
 const ABOUT_FIELD_TILE_COUNT_MOBILE = 4;
 /**
+ * The camera aspect (width/height) ABOUT_FIELD_TILES' `lateral` magnitudes
+ * were hand-tuned against — a representative desktop widescreen ratio.
+ * ROOT CAUSE fix: `lateral` is a WORLD-UNIT offset, and the frustum's actual
+ * half-width at a given depth is `depth * tan(vFov/2) * aspect` — linear in
+ * aspect. A lateral magnitude that sits comfortably inside a ~1.6-aspect
+ * desktop frustum (e.g. -3.2 at depth 6, frustum half-width ~4.0) is more
+ * than double a ~0.46-aspect mobile portrait frustum's half-width (~1.1) at
+ * that same depth — the tiles were positioned, just entirely outside the
+ * camera's view. Scaling `lateral` by `camera.aspect / this reference`
+ * (see updateAboutField) keeps every tile at the same FRACTION of the
+ * frustum's width regardless of viewport shape, instead of a fixed world
+ * offset tuned for one aspect ratio.
+ */
+const ABOUT_FIELD_LATERAL_REFERENCE_ASPECT = 1.6;
+/**
  * Multiply tint — atmospheric background, not full-contrast photos
  * competing with the text. Lightened from 0x39352f (~22% brightness),
  * which combined with the opacity below multiplied photos down far enough
@@ -1211,6 +1226,19 @@ export class JourneyScene {
     const sectionOpacity = aboutFieldOpacityAt(p);
     const diveIntensity = aboutDiveIntensityAt(p);
     const { eye, forward, right, up } = this.stationFrame(p);
+    // ROOT CAUSE fix — see ABOUT_FIELD_LATERAL_REFERENCE_ASPECT: `lateral`'s
+    // world-unit magnitudes were tuned for a desktop-ish aspect ratio; a
+    // narrower viewport (mobile portrait) has a proportionally narrower
+    // frustum at any given depth, so the same offset that sits inside the
+    // frame on desktop lands entirely outside it on mobile. Scaling by the
+    // live camera aspect keeps every tile at the same fractional position
+    // within whatever frustum width the current viewport actually has.
+    // Clamped to 1 so wider-than-reference (ultrawide) viewports don't push
+    // tiles further out than the hand-tuned desktop composition intended.
+    const lateralScale = Math.min(
+      1,
+      this.camera.aspect / ABOUT_FIELD_LATERAL_REFERENCE_ASPECT,
+    );
 
     this.aboutFieldMeshes.forEach((mesh, index) => {
       const spec = ABOUT_FIELD_TILES[index];
@@ -1220,7 +1248,7 @@ export class JourneyScene {
       mesh.position
         .copy(eye)
         .addScaledVector(forward, spec.depth)
-        .addScaledVector(right, spec.lateral)
+        .addScaledVector(right, spec.lateral * lateralScale)
         .addScaledVector(up, spec.vertical);
       // Screen-aligned, not lookAt(eye) — see the identical fix and comment
       // in updateWallMeshes; the About dive can bring a tile close enough

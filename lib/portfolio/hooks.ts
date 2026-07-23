@@ -5,8 +5,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /**
  * Reveal-on-scroll. Returns a ref callback and whether the element has entered
  * the viewport; it latches on, so content never fades back out.
+ *
+ * `viewportFraction` is measured against the VIEWPORT, not the target
+ * element's own height — done via a negative bottom `rootMargin` (shrinking
+ * the effective intersection area up from the real viewport bottom) plus
+ * `threshold: 0`, so reveal fires the instant the target crosses into that
+ * shrunk area, rather than once a *fraction of the target's own height* is
+ * visible.
+ *
+ * ROOT CAUSE this replaces: the previous `{ threshold: 0.15 }` measured
+ * against the target's own total height. For a short element that's a small
+ * absolute scroll distance, but for a tall one it demands proportionally
+ * more real scroll before revealing anything — e.g. Booking's single-column
+ * mobile layout (no room for its desktop grid, so cards/calendar/form stack
+ * to ~3000px instead of a ~1200px, multi-column desktop render) needed 15%
+ * of *that* — ~450px of real scroll — before any content even started its
+ * opacity transition. Stacked on top of the sitewide 3x scroll-sensitivity
+ * reduction (SCROLL_TO_DIVE_RATE), that read as several screens of blank
+ * scrolling on mobile specifically, purely because the same element happens
+ * to render far taller there. A viewport-relative margin costs the same
+ * scroll distance to trigger regardless of how tall the target renders.
  */
-export function useInView(threshold = 0.15) {
+export function useInView(viewportFraction = 0.15) {
   const [inView, setInView] = useState(false);
   const seen = useRef(false);
 
@@ -27,13 +47,13 @@ export function useInView(threshold = 0.15) {
           setInView(true);
           observer.disconnect();
         },
-        { threshold },
+        { threshold: 0, rootMargin: `0px 0px -${viewportFraction * 100}% 0px` },
       );
       observer.observe(element);
 
       return () => observer.disconnect();
     },
-    [threshold],
+    [viewportFraction],
   );
 
   return [ref, inView] as const;
