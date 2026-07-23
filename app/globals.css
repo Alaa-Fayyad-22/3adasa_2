@@ -17,6 +17,20 @@
   /* Page gutter, shared by every full-width section. */
   --gutter: clamp(20px, 4vw, 64px);
 
+  /*
+   * Total height of the fixed site header (SiteHeader.tsx), declared here —
+   * not left to emerge from the nav logo's rendered size plus padding — so
+   * anything that needs to sit clear of the header (see .journeyPortfolio in
+   * Journey.tsx) can read this ONE value instead of guessing a viewport-unit
+   * offset that happens to work for whatever the header's content currently
+   * measures. `.header` and `.logoNav` both derive their own sizing from
+   * this and --logo-h below, so the two can never drift out of sync the way
+   * a hand-tuned "top: 9vh" silently did the last time the header's real
+   * height changed out from under it.
+   */
+  --header-h: clamp(64px, 11vw, 92px);
+  --logo-h: clamp(28px, 5vw, 42px);
+
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-overshoot: cubic-bezier(0.34, 1.56, 0.64, 1);
 }

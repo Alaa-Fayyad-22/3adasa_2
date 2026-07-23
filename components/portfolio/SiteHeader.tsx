@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import { Logo } from "./Logo";
 import styles from "./portfolio.module.css";
 
 export type NavTarget = "portfolio" | "about" | "booking" | "contact";
@@ -44,7 +45,7 @@ export function SiteHeader({
     <>
       <header className={styles.header}>
         <a className={styles.wordmark} href="#top">
-          JAD&nbsp;DAOU
+          <Logo variant="nav" />
         </a>
         <button
           type="button"

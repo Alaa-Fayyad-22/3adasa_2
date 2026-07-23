@@ -2,6 +2,7 @@
 
 import { CONTACT } from "@/lib/portfolio/content";
 import { useInView } from "@/lib/portfolio/hooks";
+import { Logo } from "./Logo";
 import styles from "./portfolio.module.css";
 
 export function SiteFooter() {
@@ -11,7 +12,9 @@ export function SiteFooter() {
     <footer id="contact" ref={ref} className={styles.footer} data-revealed={revealed}>
       <div className={styles.footerTop}>
         <div>
-          <p className={styles.footerMark}>Jad&nbsp;Daou</p>
+          <div className={styles.footerLogoWrap}>
+            <Logo variant="footer" />
+          </div>
           <p className={styles.footerBlurb}>
             Photography for portraits, landscapes, weddings, and editorial work.
           </p>

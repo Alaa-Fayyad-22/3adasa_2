@@ -155,23 +155,54 @@
   right: 0;
   left: 0;
   z-index: 50;
+  /*
+   * Height is DECLARED (--header-h), not left to emerge from padding plus
+   * whatever the logo happens to render at — see the --header-h comment in
+   * globals.css. That's what makes the header's real height predictable
+   * enough for .journeyPortfolio to safely clear it.
+   */
+  height: var(--header-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 26px var(--gutter);
+  padding: 0 var(--gutter);
   /* Inverts against whatever scrolls beneath, so the mark stays legible. */
   mix-blend-mode: difference;
 }
 
 .wordmark {
-  font-family: var(--font-display), serif;
-  font-size: 19px;
-  letter-spacing: 0.05em;
-  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
 }
 
-.wordmark:hover {
-  color: var(--ink);
+/* Shared by Logo.tsx (SiteHeader + SiteFooter) — see the component for why
+   this is one place rather than each caller re-deriving its own sizing. */
+.logo {
+  display: block;
+  width: auto;
+  filter: drop-shadow(0 1px 6px rgba(0, 0, 0, 0.35));
+}
+
+/*
+ * Explicit, deliberate height — NOT Tailwind's `h-10` (this project doesn't
+ * have Tailwind installed/configured, so utility classes like that silently
+ * do nothing; the logo was rendering at next/image's raw `height={50}` prop
+ * instead, which combined with the header's old content-driven padding was
+ * the direct cause of the header ballooning tall enough to overlap
+ * .journeyPortfolio's "Selected Work" — see --header-h in globals.css).
+ * Reads the same --logo-h token the header's own height budget was sized
+ * against, and scales down with viewport width via clamp() rather than a
+ * fixed breakpoint list, consistent with --gutter elsewhere in this file.
+ */
+.logoNav {
+  height: var(--logo-h);
+}
+
+/* Smaller and fixed (not viewport-scaled) — the footer is read at a single
+   relaxed scroll position, not raced past like the nav bar, so it doesn't
+   need to track viewport width the way the nav logo does. */
+.logoFooter {
+  height: 50px;
 }
 
 .menuToggle {
@@ -394,7 +425,13 @@
 .journeyPortfolio {
   position: absolute;
   z-index: 3;
-  top: 9vh;
+  /*
+   * Explicitly clears the fixed header (--header-h) plus a fixed breathing
+   * gap, instead of a bare "9vh" that only happened to clear the header
+   * back when the header's height was emergent from a short text wordmark.
+   * Self-corrects if --header-h ever changes again — see the comment there.
+   */
+  top: calc(var(--header-h) + 24px);
   right: 0;
   left: 0;
   display: flex;
@@ -1198,11 +1235,8 @@
   gap: 40px;
 }
 
-.footerMark {
+.footerLogoWrap {
   margin: 0 0 14px;
-  font-family: var(--font-display), serif;
-  font-size: 24px;
-  color: var(--ink);
 }
 
 .footerBlurb {
