@@ -1,0 +1,189 @@
+/*
+ * Plain CSS Module — deliberately NOT Tailwind utility classes. This
+ * project has no Tailwind dependency, config, or PostCSS setup at all (see
+ * package.json); every `bg-cream`, `flex`, `min-h-screen`, `h-[420px]`,
+ * `text-ink/60`, `animate-dot-pulse`, etc. that page.tsx previously used
+ * was silently a no-op. That single fact explained all three reported
+ * symptoms at once: no flex/min-h-screen/items-center/justify-center meant
+ * no centering (content fell into normal block flow); no cream/ink theme
+ * meant the page's own background/text never applied, so it fell through
+ * to inherit <body>'s DARK theme from the main immersive site's
+ * app/globals.css (`--bg`/`--ink` there are the opposite of what they mean
+ * here — that site's `--ink` is a light colour for text on a dark
+ * background, not a dark "ink on cream" colour, so it was never safe to
+ * reuse). The aperture/dot animations themselves are real, page-scoped CSS
+ * here (not Tailwind), so they run independently of any of that — see the
+ * component for why the animation looked frozen anyway in the browser this
+ * was diagnosed in (prefers-reduced-motion, not a bug).
+ */
+
+:root {
+  /* Scoped to this page's own light "coming soon" palette — intentionally
+     not the main site's --bg/--ink, which are for its dark theme. */
+  --cs-cream: #f4efe4;
+  --cs-ink: #1a1714;
+  --cs-steel: #6b7280;
+}
+
+.page {
+  position: relative;
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--cs-cream);
+  padding: 0 24px;
+  text-align: center;
+}
+
+.aperture {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 420px;
+  height: 420px;
+  pointer-events: none;
+  /* Static base transform, kept SEPARATE from the animation below — with
+     only the animation providing translate(-50%,-50%) (as its Tailwind-era
+     equivalent implicitly relied on), disabling the animation under
+     reduced motion would un-center the ring entirely, not just freeze it. */
+  transform: translate(-50%, -50%);
+  animation: apertureRotate 60s linear infinite;
+}
+
+@media (min-width: 768px) {
+  .aperture {
+    width: 560px;
+    height: 560px;
+  }
+}
+
+.bladeBlade {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 50%;
+  transform-origin: bottom center;
+}
+
+.bladeBlade::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 2px;
+  height: 100%;
+  background: var(--cs-steel);
+  opacity: 0.28;
+  border-radius: 999px;
+  animation: apertureBreathe 7s ease-in-out infinite;
+}
+
+@keyframes apertureBreathe {
+  0% {
+    transform: scaleY(0.62);
+    opacity: 0.16;
+  }
+  45% {
+    transform: scaleY(0.92);
+    opacity: 0.34;
+  }
+  60% {
+    transform: scaleY(0.92);
+    opacity: 0.34;
+  }
+  100% {
+    transform: scaleY(0.62);
+    opacity: 0.16;
+  }
+}
+
+@keyframes apertureRotate {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aperture {
+    animation: none;
+  }
+  .bladeBlade::before {
+    animation: none;
+    transform: scaleY(0.8);
+    opacity: 0.26;
+  }
+}
+
+.logo {
+  position: relative;
+  height: 64px;
+  width: auto;
+  filter: drop-shadow(0 2px 8px rgba(26, 23, 20, 0.12));
+}
+
+.title {
+  position: relative;
+  margin: 40px 0 0;
+  font-family: var(--font-display), serif;
+  /* 600, not 700 — layout.tsx only loads Playfair Display at weights
+     400/500/600; a heavier weight than that renders as browser-synthesized
+     fake bold instead of the real cut. */
+  font-weight: 600;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: var(--cs-ink);
+}
+
+.subtitle {
+  position: relative;
+  margin: 12px 0 0;
+  max-width: 384px;
+  font-size: 14px;
+  /* rgba literal, not CSS relative-color syntax (rgb(from ...)) — keeps
+     this working on older browser versions without a fallback. Matches
+     --cs-ink's #1a1714 at 60% opacity. */
+  color: rgba(26, 23, 20, 0.6);
+}
+
+.dots {
+  position: relative;
+  margin-top: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  height: 10px;
+  width: 10px;
+  border-radius: 999px;
+  background: var(--cs-steel);
+  animation: dotPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    animation: none;
+    opacity: 0.6;
+  }
+}

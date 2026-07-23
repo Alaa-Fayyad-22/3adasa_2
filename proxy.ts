@@ -9,5 +9,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!coming-soon|_next|.*\\..*).*)'],
+  // matcher: ['/((?!coming-soon|_next|.*\\..*).*)'],
+  matcher: [],
 };
