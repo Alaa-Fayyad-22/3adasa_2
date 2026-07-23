@@ -9,5 +9,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [], // empty array = proxy runs on no routes = effectively off
+  matcher: ['/((?!coming-soon|_next|.*\\..*).*)'],
 };
