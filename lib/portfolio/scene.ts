@@ -165,16 +165,23 @@ function portfolioFocusAt(localDepth: number): {
 }
 
 /**
- * Non-blocking click-to-inspect: a clicked photo eases toward a closer,
- * larger "presented" pose directly ahead of the camera — see focusAt/
- * updateWallMeshes — without pausing the scroll-driven corridor in any way.
- * Any further scroll immediately cancels it (see FOCUS_DISMISS_EPSILON in
- * animate), so there's no modal state to explicitly close.
+ * Click-to-inspect: a clicked photo's WORLD-SPACE plane simply hides (fades
+ * to 0 opacity) — it does NOT move toward a shared "in front of camera"
+ * pose. That in-place move used to be how this worked (see git history) and
+ * is the ROOT CAUSE of the reported overlap bug: lerping a clicked plane
+ * toward a fixed presented position put it on a collision course with
+ * whichever OTHER plane already happened to be sitting near that spot (most
+ * often the current nearest one), so two textured quads rendered
+ * interleaved/z-fighting mid-transition — "two photos awkwardly stacked,
+ * neither centered." The actual "detail view" — a larger, clearly in-focus
+ * render of the same photo, off to whichever side of the screen has more
+ * room, with a caption panel beside it — is a plain DOM overlay
+ * (PhotoDetail.tsx) layered above the canvas, entirely outside the 3D
+ * scene's shared coordinate space, so it can never collide with another
+ * plane by construction. This mesh-hide is only there so the WebGL original
+ * isn't ALSO still visible (double-rendered) underneath that DOM overlay.
  */
-const FOCUS_PRESENT_DEPTH = 3.4;
-const FOCUS_PRESENT_SCALE = 1.7;
-/** Progress moved since a click before it's treated as "the user scrolled, drop the focus." */
-const FOCUS_DISMISS_EPSILON = 0.004;
+const FOCUS_HIDE_RATE = 14;
 
 /** Per-mesh animation state, read/written every frame — not React state. */
 interface WallMeshState {
@@ -184,7 +191,7 @@ interface WallMeshState {
   /** Smoothed hover-tilt, applied as a small local rotation after facing. */
   tiltX: number;
   tiltY: number;
-  /** Eased 0..1 — see focusAt/FOCUS_PRESENT_DEPTH. */
+  /** Eased 0..1 — how hidden this plane is because IT is the clicked one. See focusAt. */
   focusAmount: number;
 }
 
@@ -716,10 +723,13 @@ export class JourneyScene {
    */
   private categorySwitchFade = 0;
 
-  /** Index of the clicked-to-inspect photo, or -1 — see focusAt. */
+  /**
+   * Index of the clicked-to-inspect photo, or -1 — see focusAt/clearFocus.
+   * The DOM detail view (PhotoDetail.tsx) is now the sole source of truth
+   * for opening/closing it; this only drives hiding the corresponding
+   * WebGL plane so it isn't double-rendered underneath that overlay.
+   */
   private focusedIndex = -1;
-  /** Scroll progress at the moment focus started; any further movement past FOCUS_DISMISS_EPSILON drops it. */
-  private focusedFromProgress = 0;
 
   /** Smoothed scroll progress; the raw value is eased toward each frame. */
   private progress = 0;
@@ -1126,8 +1136,9 @@ export class JourneyScene {
    * Positions every corridor plane at its FIXED world position and drives
    * its blur/scale/opacity from its LIVE signed distance along the
    * camera's forward axis — see portfolioFocusAt. A clicked plane
-   * (focusAmount > 0) blends toward a closer, larger "presented" pose on
-   * top of that, without touching anything else.
+   * (focusAmount > 0) simply fades OUT in place — see FOCUS_HIDE_RATE — so
+   * it never moves toward, or overlaps, any other plane; the actual detail
+   * view is the DOM overlay layered on top (PhotoDetail.tsx).
    */
   private updateWallMeshes(sectionOpacity: number, dt: number): void {
     const eye = this.camera.position;
@@ -1167,14 +1178,8 @@ export class JourneyScene {
 
       const targetFocus = state.index === this.focusedIndex ? 1 : 0;
       state.focusAmount +=
-        (targetFocus - state.focusAmount) * (1 - Math.exp(-dt * 10));
+        (targetFocus - state.focusAmount) * (1 - Math.exp(-dt * FOCUS_HIDE_RATE));
 
-      if (state.focusAmount > 0.001) {
-        const presented = eye
-          .clone()
-          .addScaledVector(forward, FOCUS_PRESENT_DEPTH);
-        mesh.position.lerp(presented, state.focusAmount);
-      }
       // Screen-aligned (parallel to the camera's own image plane), NOT
       // mesh.lookAt(eye) (which faces the camera's POSITION instead of its
       // VIEW DIRECTION) — lookAt is correct for something dead-centre, but
@@ -1189,21 +1194,17 @@ export class JourneyScene {
       if (state.tiltX) mesh.rotateX(state.tiltX);
       if (state.tiltY) mesh.rotateY(state.tiltY);
 
-      const finalScale = THREE.MathUtils.lerp(
-        cappedScale,
-        FOCUS_PRESENT_SCALE,
-        state.focusAmount,
-      );
-      mesh.scale.setScalar(finalScale);
+      mesh.scale.setScalar(cappedScale);
 
       const uniforms = mesh.material.uniforms;
-      uniforms.blur.value = THREE.MathUtils.lerp(blur, 0, state.focusAmount);
+      uniforms.blur.value = blur;
       // Section-level fade (ROOT CAUSE fix): a plane only ever renders
-      // opaque while the portfolio section is actually active. The
-      // corridor's own distance-based opacity and the focus blend both
-      // compose with it rather than either clobbering the other.
+      // opaque while the portfolio section is actually active. The clicked
+      // plane additionally fades all the way to 0 (focusAmount → 1) so the
+      // DOM detail view showing the same photo is never double-rendered
+      // against it.
       uniforms.opacity.value =
-        THREE.MathUtils.lerp(opacity, 1, state.focusAmount) * wallFade;
+        opacity * wallFade * (1 - state.focusAmount);
     });
   }
 
@@ -1421,14 +1422,18 @@ export class JourneyScene {
   /**
    * Click/tap-to-inspect: raycasts fresh from the given screen coordinates
    * (NOT from the hover-only `pointer`, which touch never moves) so this
-   * works identically on desktop and touch. Brings the hit photo into a
-   * closer, larger "presented" pose — see FOCUS_PRESENT_DEPTH and
-   * updateWallMeshes — WITHOUT pausing or blocking the scroll-driven
-   * corridor in any way; any further scroll drops it again (see animate).
+   * works identically on desktop and touch, and against ANY wall plane
+   * regardless of how near/far/mid-transition it currently is — raycasting
+   * naturally hits whichever plane is under the pointer, sorted nearest
+   * first, with no special-casing needed for "the current one" vs. one
+   * still approaching in the background. Returns the hit index so the
+   * caller (Journey.tsx) can mount the DOM detail view; this call only
+   * records which plane to hide (see updateWallMeshes) — it does not by
+   * itself pause scrolling or open anything visual.
    */
-  focusAt(clientX: number, clientY: number): void {
+  focusAt(clientX: number, clientY: number): { index: number } | null {
     const [from, to] = PORTFOLIO_RANGE;
-    if (this.progress < from || this.progress > to) return;
+    if (this.progress < from || this.progress > to) return null;
 
     const ndc = new THREE.Vector2(
       (clientX / window.innerWidth) * 2 - 1,
@@ -1436,10 +1441,15 @@ export class JourneyScene {
     );
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = this.raycaster.intersectObjects(this.wallMeshes)[0];
-    if (!hit) return;
+    if (!hit) return null;
 
     this.focusedIndex = hit.object.userData.index as number;
-    this.focusedFromProgress = this.progress;
+    return { index: this.focusedIndex };
+  }
+
+  /** Un-hides the focused plane again — called when the DOM detail view closes. */
+  clearFocus(): void {
+    this.focusedIndex = -1;
   }
 
   /* ----------------------------- render loop ----------------------------- */
@@ -1531,16 +1541,11 @@ export class JourneyScene {
       (p - TRACK_PROGRESS_END) / (BOOKING_PROGRESS_END - TRACK_PROGRESS_END),
     );
 
-    // A click-focused photo is dismissed the moment the user scrolls again
-    // — no explicit close, nothing that blocks the dive: the dive itself
-    // never paused in the first place (the camera path below is driven by
-    // `p` exactly as always), this only stops re-presenting the photo.
-    if (
-      this.focusedIndex >= 0 &&
-      Math.abs(p - this.focusedFromProgress) > FOCUS_DISMISS_EPSILON
-    ) {
-      this.focusedIndex = -1;
-    }
+    // A click-focused photo is now dismissed only explicitly — by the DOM
+    // detail view's own close affordances (click the photo again, click
+    // outside) calling clearFocus(), see Journey.tsx/PhotoDetail.tsx. Scroll
+    // is frozen for the duration (body overflow + Lenis both paused), so
+    // there's no live `p` drift to react to here in the meantime.
 
     this.mouseSmooth.x += (this.mouseRaw.x - this.mouseSmooth.x) * 0.05;
     this.mouseSmooth.y += (this.mouseRaw.y - this.mouseSmooth.y) * 0.05;

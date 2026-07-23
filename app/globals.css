@@ -77,6 +77,17 @@ textarea::placeholder {
   outline-offset: 3px;
 }
 
+/* Mobile Safari/Chrome paint a grey/blue highlight box over tapped links and
+   buttons by default — most visible on the header wordmark, menu toggle, and
+   category tabs, which have no visual press state of their own to mask it.
+   `:focus-visible` above is untouched by this: tap highlight is a distinct
+   touch-only affordance, not a focus outline, so keyboard users still get
+   theirs. */
+a,
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
 @keyframes scrollCue {
   0% {
     transform: translateY(0);

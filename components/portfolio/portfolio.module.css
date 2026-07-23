@@ -1304,6 +1304,93 @@
   color: var(--ink-60);
 }
 
+/* ---------------------------------------------------- click-to-inspect ---
+   The 3D journey's "detail view" (PhotoDetail.tsx): a plain DOM overlay
+   above the canvas, deliberately outside the WebGL scene's own coordinate
+   space (see the FOCUS_HIDE_RATE comment in scene.ts) so it can never
+   overlap another corridor plane the way the old in-scene "presented pose"
+   used to. The backdrop's blur+dark tint is what satisfies "other photos
+   fade back/blur slightly" on its own, on top of the corridor planes' own
+   opacity fade in updateWallMeshes. ------------------------------------ */
+
+.detailOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gutter);
+  background: rgba(8, 8, 9, 0.82);
+  backdrop-filter: blur(10px) saturate(0.85);
+  -webkit-backdrop-filter: blur(10px) saturate(0.85);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.32s var(--ease-out-expo);
+}
+
+.detailOverlay[data-open="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.detailContent {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(28px, 4vw, 64px);
+  width: 100%;
+  max-width: 1400px;
+  transform: scale(0.96);
+  transition: transform 0.36s var(--ease-out-expo);
+}
+
+.detailOverlay[data-open="true"] .detailContent {
+  transform: scale(1);
+}
+
+/* `side` is where the PHOTO grows into — the side of the screen the click
+   left more room on — with the text panel taking the space next to it. */
+.detailContent[data-side="left"] {
+  flex-direction: row;
+}
+
+.detailContent[data-side="right"] {
+  flex-direction: row-reverse;
+}
+
+.detailPhoto {
+  position: relative;
+  flex: 1 1 auto;
+  width: min(58vw, 900px);
+  height: min(82vh, 900px);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.detailText {
+  flex: 0 0 clamp(220px, 26vw, 360px);
+  max-width: 360px;
+}
+
+.detailCaption {
+  margin: 0 0 18px;
+  font-family: var(--font-display), serif;
+  font-weight: 400;
+  font-size: clamp(22px, 2.6vw, 34px);
+  color: var(--ink);
+}
+
+.detailPlaceholder {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-50);
+  font-style: italic;
+}
+
 /* ------------------------------------------------------------ responsive -- */
 
 @media (max-width: 900px) {
@@ -1318,6 +1405,36 @@
 
   .journeyAboutInner {
     max-width: min(480px, 84vw);
+  }
+
+  .detailPhoto {
+    width: min(52vw, 640px);
+  }
+
+  .detailText {
+    flex-basis: clamp(180px, 30vw, 300px);
+  }
+}
+
+/* Below this, the side-by-side detail layout has no room left to stay
+   legible — stack photo above text instead, `side` no longer meaningful. */
+@media (max-width: 760px) {
+  .detailContent,
+  .detailContent[data-side="left"],
+  .detailContent[data-side="right"] {
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .detailPhoto {
+    width: min(88vw, 640px);
+    height: min(52vh, 640px);
+  }
+
+  .detailText {
+    flex-basis: auto;
+    max-width: min(88vw, 480px);
+    text-align: center;
   }
 }
 
