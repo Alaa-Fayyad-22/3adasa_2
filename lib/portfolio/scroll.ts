@@ -25,20 +25,35 @@ export const WAYPOINTS = {
 let lenis: Lenis | null = null;
 
 /**
- * How much native scroll-input distance (wheel, trackpad, or touch drag) it
- * takes to move the camera through the 3D journey, relative to Lenis's
- * defaults (`wheelMultiplier`/`touchMultiplier` of 1 each). One input unit
- * used to dive the camera roughly 3x further than felt controllable —
- * confirmed visually, two scroll ticks took a photo from barely-visible-in
- * -the-distance to filling the entire screen edge-to-edge. This is the
- * single knob for that: it scales Lenis's own delta multipliers, so wheel,
- * trackpad (both fire `wheel` events) and touch/momentum (via `syncTouch`,
- * which reads `touchMultiplier`) all slow down together. Re-tune here only —
- * nothing else converts scroll into camera travel (see
- * JourneyScene.readScrollProgress in scene.ts, which just reads Lenis's
- * already-scaled native scroll position).
+ * How much native wheel/trackpad scroll distance it takes to move the
+ * camera through the 3D journey, relative to Lenis's own default
+ * `wheelMultiplier` of 1. One input unit used to dive the camera roughly 3x
+ * further than felt controllable — confirmed visually, two scroll ticks
+ * took a photo from barely-visible-in-the-distance to filling the entire
+ * screen edge-to-edge. Desktop-only now — see TOUCH_SCROLL_TO_DIVE_RATE for
+ * why touch needs its own separate value rather than sharing this one.
+ * Re-tune here only for wheel/trackpad; nothing else converts scroll into
+ * camera travel (see JourneyScene.readScrollProgress in scene.ts, which
+ * just reads Lenis's already-scaled native scroll position).
  */
 export const SCROLL_TO_DIVE_RATE = 1 / 3;
+
+/**
+ * Same idea as SCROLL_TO_DIVE_RATE, but for touch drags (`touchMultiplier`,
+ * read via `syncTouch` — see initLenis). Originally this shared
+ * SCROLL_TO_DIVE_RATE's 1/3 outright, on the assumption that "input
+ * distance" was a single thing to damp uniformly. It isn't: the 1/3 figure
+ * was tuned against discrete wheel TICKS (each tick a fixed, largish delta —
+ * that's what made the undamped default feel jumpy), while touch drives
+ * Lenis continuously off actual finger-drag pixel distance, which is a much
+ * smaller number for a normal flick. Reusing wheel's damping factor on that
+ * smaller number under-drove the camera — a confirmed flick barely moved
+ * it. Touch gets its own, gentler damping instead: still well short of
+ * Lenis's undamped default (1), so the original jumpy feel doesn't come
+ * back, but enough for a normal-strength flick to read as responsive.
+ * Wheel/trackpad behavior (SCROLL_TO_DIVE_RATE) is untouched by this.
+ */
+export const TOUCH_SCROLL_TO_DIVE_RATE = 2 / 3;
 
 /**
  * Creates the page's Lenis instance if one doesn't already exist. Idempotent
@@ -61,7 +76,7 @@ export function initLenis(): Lenis {
     duration: 1.1,
     syncTouch: true,
     wheelMultiplier: SCROLL_TO_DIVE_RATE,
-    touchMultiplier: SCROLL_TO_DIVE_RATE,
+    touchMultiplier: TOUCH_SCROLL_TO_DIVE_RATE,
   });
   return lenis;
 }
